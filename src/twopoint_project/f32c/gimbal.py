@@ -8,7 +8,7 @@ from typing import Type
 from twopoint_project.f32c.motor import F32CMotor, SerialLike
 
 
-DEFAULT_SERIAL_PORT = "/dev/ttyAS0"
+DEFAULT_SERIAL_PORT = "/dev/ttyAS4"
 DEFAULT_BAUDRATE = 115200
 DEFAULT_X_ID = 1
 DEFAULT_Y_ID = 2
@@ -16,8 +16,9 @@ DEFAULT_SPEED_RPM = 100
 DEFAULT_STARTUP_DELAY = 0.3
 DEFAULT_COMMAND_INTERVAL = 0.001
 DEFAULT_ENABLE_SETTLE_DELAY = 0.2
-A7A_UART0_TX_PIN = 7
-A7A_UART0_RX_PIN = 11
+A7A_UART_PORT_NAME = "UART4"
+A7A_UART_TX_PIN = 16
+A7A_UART_RX_PIN = 18
 
 
 class F32CGimbal:
@@ -133,7 +134,7 @@ def open_serial_gimbal(
         if getattr(exc, "errno", None) == errno.EACCES:
             raise RuntimeError(
                 f"Permission denied opening {port}. "
-                f"For A7A UART0, run: sudo chgrp dialout {port} && sudo chmod 660 {port}"
+                f"Run: sudo chgrp dialout {port} && sudo chmod 660 {port}"
             ) from exc
         raise
     return F32CGimbal(

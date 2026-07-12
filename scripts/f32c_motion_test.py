@@ -17,8 +17,9 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_STARTUP_DELAY,
     DEFAULT_X_ID,
     DEFAULT_Y_ID,
-    A7A_UART0_RX_PIN,
-    A7A_UART0_TX_PIN,
+    A7A_UART_PORT_NAME,
+    A7A_UART_RX_PIN,
+    A7A_UART_TX_PIN,
     open_serial_gimbal,
 )
 
@@ -27,7 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run a small visible F32C gimbal motion test. "
-            f"Default port targets A7A UART0: TX pin {A7A_UART0_TX_PIN}, RX pin {A7A_UART0_RX_PIN}."
+            f"Default port targets A7A {A7A_UART_PORT_NAME}: "
+            f"TX pin {A7A_UART_TX_PIN}, RX pin {A7A_UART_RX_PIN}."
         )
     )
     parser.add_argument("--port", default=DEFAULT_SERIAL_PORT)

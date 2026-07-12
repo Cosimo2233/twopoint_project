@@ -19,8 +19,9 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_STARTUP_DELAY,
     DEFAULT_X_ID,
     DEFAULT_Y_ID,
-    A7A_UART0_RX_PIN,
-    A7A_UART0_TX_PIN,
+    A7A_UART_PORT_NAME,
+    A7A_UART_RX_PIN,
+    A7A_UART_TX_PIN,
     open_serial_gimbal,
 )
 
@@ -52,7 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Control an F32C two-axis gimbal. "
-            f"Default port targets A7A UART0: TX pin {A7A_UART0_TX_PIN}, RX pin {A7A_UART0_RX_PIN}."
+            f"Default port targets A7A {A7A_UART_PORT_NAME}: "
+            f"TX pin {A7A_UART_TX_PIN}, RX pin {A7A_UART_RX_PIN}."
         )
     )
     parser.add_argument("--port", default=env_str("F32C_SERIAL_PORT", DEFAULT_SERIAL_PORT))
@@ -79,19 +81,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-frames", action="store_true", help="Print outgoing F32C frames as hex.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("enable", help="Enable both gimbal motors only.")
-    subparsers.add_parser("init", help="Initialize and optionally zero the gimbal.")
-    subparsers.add_parser("disable", help="Disable both gimbal motors.")
+    enable = subparsers.add_parser("enable", help="Enable both gimbal motors only.")
+    add_command_debug_option(enable)
+    init = subparsers.add_parser("init", help="Initialize and optionally zero the gimbal.")
+    add_command_debug_option(init)
+    disable = subparsers.add_parser("disable", help="Disable both gimbal motors.")
+    add_command_debug_option(disable)
 
     move_by = subparsers.add_parser("move-by", help="Move by angular offsets in degrees.")
+    add_command_debug_option(move_by)
     move_by.add_argument("--x", type=float, required=True)
     move_by.add_argument("--y", type=float, required=True)
 
     move_to = subparsers.add_parser("move-to", help="Move to absolute multi-turn angles in degrees.")
+    add_command_debug_option(move_to)
     move_to.add_argument("--x", type=float, required=True)
     move_to.add_argument("--y", type=float, required=True)
 
     return parser.parse_args()
+
+
+def add_command_debug_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--debug-frames",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Print outgoing F32C frames as hex.",
+    )
 
 
 def build_gimbal(args: argparse.Namespace):

@@ -88,6 +88,18 @@ class F32CGimbalTest(unittest.TestCase):
 
 
 class F32CCliTest(unittest.TestCase):
+    def test_debug_frames_can_follow_subcommand(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            ["cli.py", "--port", "/dev/ttyAS4", "disable", "--debug-frames"],
+        ):
+            args = cli.parse_args()
+
+        self.assertEqual(args.command, "disable")
+        self.assertEqual(args.port, "/dev/ttyAS4")
+        self.assertTrue(args.debug_frames)
+
     def test_help_displays(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
