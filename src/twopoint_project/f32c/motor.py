@@ -18,10 +18,12 @@ class F32CMotor:
         motor_id: int,
         *,
         command_interval: float = 0.001,
+        debug_frames: bool = False,
     ) -> None:
         self.serial_port = serial_port
         self.motor_id = motor_id
         self.command_interval = command_interval
+        self.debug_frames = debug_frames
         self.target_angle_deg = 0.0
 
     def enable(self) -> None:
@@ -48,6 +50,8 @@ class F32CMotor:
         self.move_to_angle(self.target_angle_deg + float(delta_deg))
 
     def _send(self, frame: bytes) -> None:
+        if self.debug_frames:
+            print(f"F32C[{self.motor_id}] -> {frame.hex(' ').upper()}")
         self.serial_port.write(frame)
         if self.command_interval > 0:
             time.sleep(self.command_interval)

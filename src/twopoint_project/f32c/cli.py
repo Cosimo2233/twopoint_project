@@ -13,11 +13,14 @@ except ModuleNotFoundError:
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
+    DEFAULT_ENABLE_SETTLE_DELAY,
     DEFAULT_SERIAL_PORT,
     DEFAULT_SPEED_RPM,
     DEFAULT_STARTUP_DELAY,
     DEFAULT_X_ID,
     DEFAULT_Y_ID,
+    A7A_UART0_RX_PIN,
+    A7A_UART0_TX_PIN,
     open_serial_gimbal,
 )
 
@@ -46,7 +49,12 @@ def env_str(name: str, default: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Control an F32C two-axis gimbal.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Control an F32C two-axis gimbal. "
+            f"Default port targets A7A UART0: TX pin {A7A_UART0_TX_PIN}, RX pin {A7A_UART0_RX_PIN}."
+        )
+    )
     parser.add_argument("--port", default=env_str("F32C_SERIAL_PORT", DEFAULT_SERIAL_PORT))
     parser.add_argument("--baudrate", type=int, default=env_int("F32C_BAUDRATE", DEFAULT_BAUDRATE))
     parser.add_argument("--x-id", type=int, default=env_int("F32C_X_ID", DEFAULT_X_ID))
@@ -63,8 +71,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=env_float("F32C_COMMAND_INTERVAL", DEFAULT_COMMAND_INTERVAL),
     )
+    parser.add_argument(
+        "--enable-settle-delay",
+        type=float,
+        default=env_float("F32C_ENABLE_SETTLE_DELAY", DEFAULT_ENABLE_SETTLE_DELAY),
+    )
+    parser.add_argument("--debug-frames", action="store_true", help="Print outgoing F32C frames as hex.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("enable", help="Enable both gimbal motors only.")
     subparsers.add_parser("init", help="Initialize and optionally zero the gimbal.")
     subparsers.add_parser("disable", help="Disable both gimbal motors.")
 
@@ -89,11 +104,17 @@ def build_gimbal(args: argparse.Namespace):
         init_zero=args.init_zero,
         startup_delay=args.startup_delay,
         command_interval=args.command_interval,
+        enable_settle_delay=args.enable_settle_delay,
+        debug_frames=args.debug_frames,
     )
 
 
 def run(args: argparse.Namespace) -> None:
     with build_gimbal(args) as gimbal:
+        if args.command == "enable":
+            gimbal.enable()
+            return
+
         if args.command == "disable":
             gimbal.disable()
             return

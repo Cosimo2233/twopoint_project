@@ -58,6 +58,7 @@ class F32CGimbalTest(unittest.TestCase):
             init_zero=True,
             startup_delay=0,
             command_interval=0,
+            enable_settle_delay=0,
         )
 
         gimbal.initialize()

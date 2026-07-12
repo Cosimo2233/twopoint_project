@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import time
 from types import TracebackType
 from typing import Type
@@ -7,13 +8,16 @@ from typing import Type
 from twopoint_project.f32c.motor import F32CMotor, SerialLike
 
 
-DEFAULT_SERIAL_PORT = "/dev/ttyUSB0"
+DEFAULT_SERIAL_PORT = "/dev/ttyAS0"
 DEFAULT_BAUDRATE = 115200
 DEFAULT_X_ID = 1
 DEFAULT_Y_ID = 2
 DEFAULT_SPEED_RPM = 100
 DEFAULT_STARTUP_DELAY = 0.3
 DEFAULT_COMMAND_INTERVAL = 0.001
+DEFAULT_ENABLE_SETTLE_DELAY = 0.2
+A7A_UART0_TX_PIN = 7
+A7A_UART0_RX_PIN = 11
 
 
 class F32CGimbal:
@@ -27,13 +31,16 @@ class F32CGimbal:
         init_zero: bool = True,
         startup_delay: float = DEFAULT_STARTUP_DELAY,
         command_interval: float = DEFAULT_COMMAND_INTERVAL,
+        enable_settle_delay: float = DEFAULT_ENABLE_SETTLE_DELAY,
+        debug_frames: bool = False,
     ) -> None:
         self.serial_port = serial_port
-        self.x = F32CMotor(serial_port, x_id, command_interval=command_interval)
-        self.y = F32CMotor(serial_port, y_id, command_interval=command_interval)
+        self.x = F32CMotor(serial_port, x_id, command_interval=command_interval, debug_frames=debug_frames)
+        self.y = F32CMotor(serial_port, y_id, command_interval=command_interval, debug_frames=debug_frames)
         self.speed_rpm = speed_rpm
         self.init_zero = init_zero
         self.startup_delay = startup_delay
+        self.enable_settle_delay = enable_settle_delay
 
     def __enter__(self) -> F32CGimbal:
         return self
@@ -49,18 +56,32 @@ class F32CGimbal:
     def initialize(self) -> None:
         if self.startup_delay > 0:
             time.sleep(self.startup_delay)
-        self.x.enable()
-        self.y.enable()
-        self.x.set_multi_turn_passthrough()
-        self.y.set_multi_turn_passthrough()
-        self.x.set_speed_rpm(self.speed_rpm)
-        self.y.set_speed_rpm(self.speed_rpm)
+        self.enable()
+        if self.enable_settle_delay > 0:
+            time.sleep(self.enable_settle_delay)
+        self.set_multi_turn_passthrough()
+        self.set_speed_rpm(self.speed_rpm)
         if self.init_zero:
-            self.x.zero_multi_turn_angle()
-            self.y.zero_multi_turn_angle()
+            self.zero_multi_turn_angle()
         else:
             self.x.target_angle_deg = 0.0
             self.y.target_angle_deg = 0.0
+
+    def enable(self) -> None:
+        self.x.enable()
+        self.y.enable()
+
+    def set_multi_turn_passthrough(self) -> None:
+        self.x.set_multi_turn_passthrough()
+        self.y.set_multi_turn_passthrough()
+
+    def set_speed_rpm(self, rpm: int) -> None:
+        self.x.set_speed_rpm(rpm)
+        self.y.set_speed_rpm(rpm)
+
+    def zero_multi_turn_angle(self) -> None:
+        self.x.zero_multi_turn_angle()
+        self.y.zero_multi_turn_angle()
 
     def move_by(self, x_delta_deg: float, y_delta_deg: float) -> None:
         self.x.move_by_angle(x_delta_deg)
@@ -90,18 +111,31 @@ def open_serial_gimbal(
     init_zero: bool = True,
     startup_delay: float = DEFAULT_STARTUP_DELAY,
     command_interval: float = DEFAULT_COMMAND_INTERVAL,
+    enable_settle_delay: float = DEFAULT_ENABLE_SETTLE_DELAY,
+    debug_frames: bool = False,
 ) -> F32CGimbal:
-    import serial
+    try:
+        import serial
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("pyserial is required for F32C serial control. Run: poetry install") from exc
 
-    serial_port = serial.Serial(
-        port=port,
-        baudrate=baudrate,
-        bytesize=serial.EIGHTBITS,
-        parity=serial.PARITY_NONE,
-        stopbits=serial.STOPBITS_ONE,
-        timeout=0.1,
-        write_timeout=1.0,
-    )
+    try:
+        serial_port = serial.Serial(
+            port=port,
+            baudrate=baudrate,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=0.1,
+            write_timeout=1.0,
+        )
+    except serial.SerialException as exc:
+        if getattr(exc, "errno", None) == errno.EACCES:
+            raise RuntimeError(
+                f"Permission denied opening {port}. "
+                f"For A7A UART0, run: sudo chgrp dialout {port} && sudo chmod 660 {port}"
+            ) from exc
+        raise
     return F32CGimbal(
         serial_port,
         x_id=x_id,
@@ -110,4 +144,6 @@ def open_serial_gimbal(
         init_zero=init_zero,
         startup_delay=startup_delay,
         command_interval=command_interval,
+        enable_settle_delay=enable_settle_delay,
+        debug_frames=debug_frames,
     )
