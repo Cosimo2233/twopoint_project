@@ -4,7 +4,7 @@ import argparse
 from argparse import ArgumentParser
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import cv2
 import numpy as np
@@ -25,14 +25,21 @@ POINT_COLORS = {
 }
 
 
+class PointPrediction(TypedDict):
+    label: str
+    x: float
+    y: float
+    confidence: float
+
+
 def parse_args() -> argparse.Namespace:
-    parser = ArgumentParser(description="Run ONNX inference for the two-point detector.")
+    parser = ArgumentParser(description="Run single-image ONNX inference for the two-point detector.")
     parser.add_argument("--onnx", default="model-bin/runs/twopoint/best.onnx", help="Path to the ONNX model.")
     parser.add_argument("--image", required=True, help="Input image path.")
     parser.add_argument("--output", default=None, help="Optional explicit annotated image path.")
     parser.add_argument("--output-dir", default="outputs", help="Directory for annotated images.")
     parser.add_argument("--img-size", type=int, default=640, help="Fallback square input size.")
-    parser.add_argument("--conf-threshold", type=float, default=0.0, help="Skip points below this confidence.")
+    parser.add_argument("--conf-threshold", type=float, default=0.0, help="Hide debug points below this confidence.")
     parser.add_argument("--radius", type=int, default=5, help="Point radius in pixels.")
     parser.add_argument("--save-json", action="store_true", help="Also save restored coordinates as JSON.")
     return parser.parse_args()
@@ -96,11 +103,11 @@ def resolve_input_shape(session: ort.InferenceSession, fallback: int) -> tuple[i
     return batch, channels, height, width
 
 
-def preprocess_image(image_path: Path, img_size: int) -> tuple[np.ndarray, dict[str, Any]]:
-    image_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if image_bgr is None:
-        raise FileNotFoundError(f"Failed to read image: {image_path}")
+def preprocess_frame(frame_bgr: np.ndarray, img_size: int) -> tuple[np.ndarray, dict[str, Any]]:
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+        raise ValueError(f"Expected BGR frame shape [H, W, 3], got {frame_bgr.shape}.")
 
+    image_bgr = frame_bgr
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     padded_rgb, ratio, pad = letterbox(image_rgb, img_size)
     tensor = padded_rgb.astype(np.float32) / 255.0
@@ -116,6 +123,13 @@ def preprocess_image(image_path: Path, img_size: int) -> tuple[np.ndarray, dict[
         "orig_bgr": image_bgr,
     }
     return tensor, meta
+
+
+def preprocess_image(image_path: Path, img_size: int) -> tuple[np.ndarray, dict[str, Any]]:
+    image_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image_bgr is None:
+        raise FileNotFoundError(f"Failed to read image: {image_path}")
+    return preprocess_frame(image_bgr, img_size)
 
 
 def parse_outputs(session: ort.InferenceSession, raw_outputs: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
@@ -145,15 +159,19 @@ def parse_outputs(session: ort.InferenceSession, raw_outputs: list[np.ndarray]) 
     return points, scores
 
 
-def restore_original_points(
+def restore_normalized_points(
     points: np.ndarray,
     scores: np.ndarray,
     meta: dict[str, Any],
     img_size: int,
-) -> dict[str, dict[str, float]]:
+) -> list[PointPrediction]:
     pad_x, pad_y = meta["pad"]
     ratio = meta["ratio"]
-    restored: dict[str, dict[str, float]] = {}
+    image_width = int(meta["orig_w"])
+    image_height = int(meta["orig_h"])
+    width_scale = max(image_width - 1, 1)
+    height_scale = max(image_height - 1, 1)
+    restored: list[PointPrediction] = []
 
     for point_index, name in enumerate(POINT_NAMES):
         x_model = float(points[point_index, 0]) * img_size
@@ -163,12 +181,62 @@ def restore_original_points(
 
         x_orig = float(np.clip(x_orig, 0.0, meta["orig_w"] - 1.0))
         y_orig = float(np.clip(y_orig, 0.0, meta["orig_h"] - 1.0))
-        restored[name] = {
-            "x": x_orig,
-            "y": y_orig,
+        restored.append({
+            "label": name,
+            "x": float(np.clip(x_orig / width_scale, 0.0, 1.0)),
+            "y": float(np.clip(y_orig / height_scale, 0.0, 1.0)),
             "confidence": float(scores[point_index]),
-        }
+        })
     return restored
+
+
+def infer_points(
+    session: ort.InferenceSession,
+    frame_bgr: np.ndarray,
+    img_size: int,
+    input_name: str | None = None,
+) -> list[PointPrediction]:
+    input_name = input_name or session.get_inputs()[0].name
+    batch, channels, resolved_img_size, _ = resolve_input_shape(session, img_size)
+    tensor, meta = preprocess_frame(frame_bgr, resolved_img_size)
+    expected_shape = (batch, channels, resolved_img_size, resolved_img_size)
+    if tensor.shape != expected_shape:
+        raise RuntimeError(f"Expected input tensor shape {expected_shape}, got {tensor.shape}.")
+
+    raw_outputs = session.run(None, {input_name: tensor})
+    points, scores = parse_outputs(session, raw_outputs)
+    return restore_normalized_points(points[0], scores[0], meta, resolved_img_size)
+
+
+class TwoPointOnnxInferencer:
+    def __init__(self, onnx_path: Path, img_size: int = 640) -> None:
+        self.session = create_session(onnx_path)
+        self.input_name = self.session.get_inputs()[0].name
+        _, _, self.img_size, _ = resolve_input_shape(self.session, img_size)
+
+    @property
+    def providers(self) -> list[str]:
+        return self.session.get_providers()
+
+    def predict(self, frame_bgr: np.ndarray) -> list[PointPrediction]:
+        return infer_points(self.session, frame_bgr, self.img_size, self.input_name)
+
+
+def points_for_drawing(
+    points: list[PointPrediction],
+    image_width: int,
+    image_height: int,
+) -> dict[str, dict[str, float]]:
+    width_scale = max(image_width - 1, 1)
+    height_scale = max(image_height - 1, 1)
+    return {
+        point["label"]: {
+            "x": point["x"] * width_scale,
+            "y": point["y"] * height_scale,
+            "confidence": point["confidence"],
+        }
+        for point in points
+    }
 
 
 def draw_label(image: np.ndarray, text: str, origin: tuple[int, int], color: tuple[int, int, int]) -> None:
@@ -221,38 +289,38 @@ def main() -> None:
     image_path = Path(args.image)
     output_path = Path(args.output) if args.output else default_output_path(image_path, Path(args.output_dir))
 
-    session = create_session(onnx_path)
-    input_name = session.get_inputs()[0].name
-    batch, channels, img_size, _ = resolve_input_shape(session, args.img_size)
+    frame_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if frame_bgr is None:
+        raise FileNotFoundError(f"Failed to read image: {image_path}")
 
-    tensor, meta = preprocess_image(image_path, img_size)
-    expected_shape = (batch, channels, img_size, img_size)
-    if tensor.shape != expected_shape:
-        raise RuntimeError(f"Expected input tensor shape {expected_shape}, got {tensor.shape}.")
+    inferencer = TwoPointOnnxInferencer(onnx_path, args.img_size)
+    predictions = inferencer.predict(frame_bgr)
+    restored_for_debug = points_for_drawing(
+        predictions,
+        image_width=frame_bgr.shape[1],
+        image_height=frame_bgr.shape[0],
+    )
 
-    raw_outputs = session.run(None, {input_name: tensor})
-    points, scores = parse_outputs(session, raw_outputs)
-    restored = restore_original_points(points[0], scores[0], meta, img_size)
-
-    annotated = draw_predictions(meta["orig_bgr"], restored, args.conf_threshold, args.radius)
+    annotated = draw_predictions(frame_bgr, restored_for_debug, args.conf_threshold, args.radius)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(output_path), annotated):
         raise RuntimeError(f"Failed to save annotated image: {output_path}")
 
     if args.save_json:
         json_path = output_path.with_suffix(".json")
-        json_path.write_text(json.dumps(restored, indent=2, ensure_ascii=False), encoding="utf-8")
+        json_path.write_text(json.dumps(predictions, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"Saved JSON: {json_path}")
 
     print(f"image       : {image_path}")
     print(f"onnx        : {onnx_path}")
-    print(f"input_name  : {input_name}")
-    print(f"input_shape : {tensor.shape}")
-    print(f"providers   : {session.get_providers()}")
+    print(f"input_name  : {inferencer.input_name}")
+    print(f"providers   : {inferencer.providers}")
     print(f"saved_vis   : {output_path}")
-    for name in POINT_NAMES:
-        point = restored[name]
-        print(f"{name}: x={point['x']:.2f}, y={point['y']:.2f}, confidence={point['confidence']:.4f}")
+    for point in predictions:
+        print(
+            f"{point['label']}: "
+            f"x={point['x']:.6f}, y={point['y']:.6f}, confidence={point['confidence']:.4f}"
+        )
 
 
 if __name__ == "__main__":
