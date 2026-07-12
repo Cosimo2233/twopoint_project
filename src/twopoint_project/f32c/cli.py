@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import argparse
+import os
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+
+    def load_dotenv() -> bool:
+        return False
+
+from twopoint_project.f32c.gimbal import (
+    DEFAULT_BAUDRATE,
+    DEFAULT_COMMAND_INTERVAL,
+    DEFAULT_SERIAL_PORT,
+    DEFAULT_SPEED_RPM,
+    DEFAULT_STARTUP_DELAY,
+    DEFAULT_X_ID,
+    DEFAULT_Y_ID,
+    open_serial_gimbal,
+)
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    return default if value is None or value == "" else float(value)
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    return default if value is None or value == "" else int(value)
+
+
+def env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return default if value is None or value == "" else value
+
+
+def parse_args() -> argparse.Namespace:
+    load_dotenv()
+    parser = argparse.ArgumentParser(description="Control an F32C two-axis gimbal.")
+    parser.add_argument("--port", default=env_str("F32C_SERIAL_PORT", DEFAULT_SERIAL_PORT))
+    parser.add_argument("--baudrate", type=int, default=env_int("F32C_BAUDRATE", DEFAULT_BAUDRATE))
+    parser.add_argument("--x-id", type=int, default=env_int("F32C_X_ID", DEFAULT_X_ID))
+    parser.add_argument("--y-id", type=int, default=env_int("F32C_Y_ID", DEFAULT_Y_ID))
+    parser.add_argument("--speed-rpm", type=int, default=env_int("F32C_SPEED_RPM", DEFAULT_SPEED_RPM))
+    parser.add_argument("--init-zero", action=argparse.BooleanOptionalAction, default=env_bool("F32C_INIT_ZERO", True))
+    parser.add_argument(
+        "--startup-delay",
+        type=float,
+        default=env_float("F32C_STARTUP_DELAY", DEFAULT_STARTUP_DELAY),
+    )
+    parser.add_argument(
+        "--command-interval",
+        type=float,
+        default=env_float("F32C_COMMAND_INTERVAL", DEFAULT_COMMAND_INTERVAL),
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("init", help="Initialize and optionally zero the gimbal.")
+    subparsers.add_parser("disable", help="Disable both gimbal motors.")
+
+    move_by = subparsers.add_parser("move-by", help="Move by angular offsets in degrees.")
+    move_by.add_argument("--x", type=float, required=True)
+    move_by.add_argument("--y", type=float, required=True)
+
+    move_to = subparsers.add_parser("move-to", help="Move to absolute multi-turn angles in degrees.")
+    move_to.add_argument("--x", type=float, required=True)
+    move_to.add_argument("--y", type=float, required=True)
+
+    return parser.parse_args()
+
+
+def build_gimbal(args: argparse.Namespace):
+    return open_serial_gimbal(
+        port=args.port,
+        baudrate=args.baudrate,
+        x_id=args.x_id,
+        y_id=args.y_id,
+        speed_rpm=args.speed_rpm,
+        init_zero=args.init_zero,
+        startup_delay=args.startup_delay,
+        command_interval=args.command_interval,
+    )
+
+
+def run(args: argparse.Namespace) -> None:
+    with build_gimbal(args) as gimbal:
+        if args.command == "disable":
+            gimbal.disable()
+            return
+
+        gimbal.initialize()
+        if args.command == "move-by":
+            gimbal.move_by(args.x, args.y)
+        elif args.command == "move-to":
+            gimbal.move_to(args.x, args.y)
+
+
+def main() -> None:
+    run(parse_args())
+
+
+if __name__ == "__main__":
+    main()
