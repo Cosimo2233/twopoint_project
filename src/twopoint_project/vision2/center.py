@@ -27,8 +27,6 @@ class DetectionConfig:
     debug_warp_width: int = 360
     min_border_contrast: float = 55.0
     min_good_border_sides: int = 3
-    video_confirm_frames: int = 3
-    video_max_center_jump_ratio: float = 0.18
 
 
 @dataclass(frozen=True)
@@ -119,6 +117,7 @@ def detect_target_center(
         image_shape=original.shape[:2],
         reason="ok" if found else "low_confidence",
     )
+
 
 def _detect_candidates(image: np.ndarray, cfg: DetectionConfig) -> list[TargetCandidate]:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -543,4 +542,3 @@ def _round_quad(quad: np.ndarray | None) -> list[list[float]] | None:
     if quad is None:
         return None
     return [[round(float(x), 2), round(float(y), 2)] for x, y in quad.reshape(4, 2)]
-

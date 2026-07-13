@@ -3,12 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import hypot
 import time
-from typing import Protocol, Sequence
-
-from twopoint_project.vision.points import PointPrediction
+from typing import Protocol, Sequence, TypedDict
 
 
 TARGET_CENTER_LABEL = "target_center"
+
+
+class PointPrediction(TypedDict):
+    label: str
+    x: float
+    y: float
+    confidence: float
 
 
 class GimbalLike(Protocol):

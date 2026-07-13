@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from argparse import ArgumentParser
+import os
 from pathlib import Path
 import sys
 import time
@@ -20,7 +21,6 @@ from twopoint_project.contrl.target_center_servo import (
     TargetCenterServo,
     sleep_for_loop_rate,
 )
-from twopoint_project.vision.backends import DEFAULT_VISION_BACKEND
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
@@ -34,6 +34,14 @@ from twopoint_project.f32c.gimbal import (
 )
 
 
+DEFAULT_VISION_BACKEND = "traditional"
+
+
+def env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return default if value is None or value == "" else value
+
+
 def parse_args() -> argparse.Namespace:
     load_dotenv()
     parser = ArgumentParser(
@@ -43,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--onnx", default="model-bin/best.onnx")
-    parser.add_argument("--vision-backend", default=DEFAULT_VISION_BACKEND)
+    parser.add_argument("--vision-backend", default=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND))
     parser.add_argument("--img-size", type=int, default=640)
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--camera-width", type=int, default=640)
@@ -76,13 +84,21 @@ def parse_args() -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> bool:
     from twopoint_project.vision.capture import CameraCapture
-    from twopoint_project.vision.backends import build_vision_inferencer
 
-    inferencer = build_vision_inferencer(
-        args.vision_backend,
-        onnx_path=Path(args.onnx),
-        img_size=args.img_size,
-    )
+    backend = args.vision_backend.strip().lower()
+    if backend == "traditional":
+        from twopoint_project.vision2.infer_traditional import TraditionalVisionInferencer
+
+        inferencer = TraditionalVisionInferencer()
+    elif backend == "onnx":
+        from twopoint_project.vision.infer_twopoint_onnx import TwoPointOnnxInferencer
+
+        inferencer = TwoPointOnnxInferencer(Path(args.onnx), img_size=args.img_size)
+    else:
+        raise ValueError(
+            "unsupported vision backend: "
+            f"{args.vision_backend!r}; expected 'traditional' or 'onnx'"
+        )
     servo = TargetCenterServo(
         center_x=args.center_x,
         center_y=args.center_y,

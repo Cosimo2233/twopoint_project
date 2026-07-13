@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Any
+from typing import Any, Protocol, TypedDict
 
 from dotenv import load_dotenv
 
@@ -14,8 +14,26 @@ if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from twopoint_project.vision.capture import CameraCapture
-from twopoint_project.vision.infer_twopoint_onnx import PointPrediction, TwoPointOnnxInferencer
 from twopoint_project.vision.send import UnixJsonLineSender
+
+
+DEFAULT_VISION_BACKEND = "traditional"
+
+
+class PointPrediction(TypedDict):
+    label: str
+    x: float
+    y: float
+    confidence: float
+
+
+class VisionInferencer(Protocol):
+    @property
+    def providers(self) -> list[str]:
+        ...
+
+    def predict(self, frame_bgr: Any) -> list[PointPrediction]:
+        ...
 
 
 def env_int(name: str, default: int) -> int:
@@ -38,6 +56,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = ArgumentParser(description="Run the two-point vision worker.")
     parser.add_argument("--onnx", default=env_str("TWOPOINT_ONNX_PATH", "model-bin/runs/twopoint/best.onnx"))
+    parser.add_argument("--vision-backend", default=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND))
     parser.add_argument("--camera", type=int, default=env_int("TWOPOINT_CAMERA_INDEX", 0))
     parser.add_argument("--camera-width", type=int, default=env_int("TWOPOINT_CAMERA_WIDTH", 640))
     parser.add_argument("--camera-height", type=int, default=env_int("TWOPOINT_CAMERA_HEIGHT", 480))
@@ -52,6 +71,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps-limit", type=float, default=env_float("TWOPOINT_FPS_LIMIT", 10.0))
     parser.add_argument("--img-size", type=int, default=env_int("TWOPOINT_IMG_SIZE", 640))
     return parser.parse_args()
+
+
+def build_vision_inferencer(args: argparse.Namespace) -> VisionInferencer:
+    backend = args.vision_backend.strip().lower()
+    if backend == "traditional":
+        from twopoint_project.vision2.infer_traditional import TraditionalVisionInferencer
+
+        return TraditionalVisionInferencer()
+    if backend == "onnx":
+        from twopoint_project.vision.infer_twopoint_onnx import TwoPointOnnxInferencer
+
+        return TwoPointOnnxInferencer(Path(args.onnx), img_size=args.img_size)
+    raise ValueError(
+        f"unsupported vision backend: {args.vision_backend!r}; expected 'traditional' or 'onnx'"
+    )
 
 
 def build_message(
@@ -88,7 +122,7 @@ def sleep_for_fps_limit(loop_started_at: float, fps_limit: float) -> None:
 
 
 def run_worker(args: argparse.Namespace) -> None:
-    inferencer = TwoPointOnnxInferencer(Path(args.onnx), img_size=args.img_size)
+    inferencer = build_vision_inferencer(args)
     with CameraCapture(
         camera_index=args.camera,
         width=args.camera_width,
@@ -100,6 +134,7 @@ def run_worker(args: argparse.Namespace) -> None:
     ) as sender:
         print(f"vision_worker: camera={args.camera}")
         print(f"vision_worker: socket={args.socket}")
+        print(f"vision_worker: backend={args.vision_backend}")
         print(f"vision_worker: providers={inferencer.providers}")
 
         while True:
