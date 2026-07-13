@@ -20,6 +20,7 @@ from twopoint_project.contrl.target_center_servo import (
     TargetCenterServo,
     sleep_for_loop_rate,
 )
+from twopoint_project.vision.backends import DEFAULT_VISION_BACKEND
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
@@ -42,6 +43,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--onnx", default="model-bin/best.onnx")
+    parser.add_argument("--vision-backend", default=DEFAULT_VISION_BACKEND)
     parser.add_argument("--img-size", type=int, default=640)
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--camera-width", type=int, default=640)
@@ -74,9 +76,13 @@ def parse_args() -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> bool:
     from twopoint_project.vision.capture import CameraCapture
-    from twopoint_project.vision.infer_twopoint_onnx import TwoPointOnnxInferencer
+    from twopoint_project.vision.backends import build_vision_inferencer
 
-    inferencer = TwoPointOnnxInferencer(Path(args.onnx), img_size=args.img_size)
+    inferencer = build_vision_inferencer(
+        args.vision_backend,
+        onnx_path=Path(args.onnx),
+        img_size=args.img_size,
+    )
     servo = TargetCenterServo(
         center_x=args.center_x,
         center_y=args.center_y,
@@ -106,6 +112,7 @@ def run(args: argparse.Namespace) -> bool:
         enable_settle_delay=args.enable_settle_delay,
         debug_frames=args.debug_frames,
     ) as gimbal:
+        print(f"question2: backend={args.vision_backend}")
         print(f"question2: providers={inferencer.providers}")
         print(f"question2: target-only mode, timeout={args.timeout:.2f}s")
         gimbal.initialize()
