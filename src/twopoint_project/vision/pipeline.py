@@ -37,6 +37,16 @@ class LatestVisionQueue:
         except Empty as exc:
             raise TimeoutError("timed out waiting for a vision frame") from exc
 
+        return self._drain_latest(latest)
+
+    def read_nowait_latest(self) -> VisionFrame | None:
+        try:
+            latest = self._queue.get_nowait()
+        except Empty:
+            return None
+        return self._drain_latest(latest)
+
+    def _drain_latest(self, latest: VisionFrame) -> VisionFrame:
         while True:
             try:
                 latest = self._queue.get_nowait()
@@ -101,6 +111,11 @@ class VisionProducer:
             if self._stop_event.is_set():
                 raise RuntimeError("vision producer stopped before producing a frame")
             raise
+
+    def read_nowait_latest(self) -> VisionFrame | None:
+        if self._error is not None and self.queue.empty():
+            raise RuntimeError("vision producer failed") from self._error
+        return self.queue.read_nowait_latest()
 
     def _run(self) -> None:
         try:

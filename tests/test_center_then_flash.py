@@ -85,6 +85,16 @@ class FakeInferencer:
         return [{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}]
 
 
+class FakeVisionFrames:
+    def __init__(self, frames: list[object]) -> None:
+        self.frames = list(frames)
+
+    def read_nowait_latest(self) -> object | None:
+        if not self.frames:
+            return None
+        return self.frames.pop(0)
+
+
 def make_task_config() -> CenterThenFlashConfig:
     return CenterThenFlashConfig(
         mode="center_then_flash",
@@ -231,6 +241,39 @@ class CenterThenFlashTest(unittest.TestCase):
         self.assertTrue(fake_gimbal.disabled)
         self.assertIn("on", fake_laser.events)
         self.assertEqual(fake_laser.events[-1], "off")
+
+    def test_track_target_reuses_last_valid_frame_when_no_new_frame_is_available(self) -> None:
+        fake_gimbal = FakeGimbal()
+        vision = FakeVisionFrames([
+            SimpleNamespace(
+                captured=SimpleNamespace(frame_id=1),
+                points=[{"label": "target_center", "x": 0.6, "y": 0.45, "confidence": 1.0}],
+            )
+        ])
+        servo = center_then_flash.TargetCenterServo(
+            x_gain_deg=10.0,
+            y_gain_deg=-10.0,
+            max_step_deg=2.0,
+            deadband=0.01,
+            conf_threshold=0.5,
+        )
+        stop_requested = StopAfterCalls(3)
+
+        center_then_flash.track_target(
+            vision=vision,
+            gimbal=fake_gimbal,
+            servo=servo,
+            loop_hz=0,
+            stale_target_seconds=1.0,
+            stale_target_step_scale=0.5,
+            stop_requested=stop_requested,
+        )
+
+        self.assertEqual(len(fake_gimbal.moves), 2)
+        self.assertAlmostEqual(fake_gimbal.moves[0][0], 1.0)
+        self.assertAlmostEqual(fake_gimbal.moves[0][1], 0.5)
+        self.assertAlmostEqual(fake_gimbal.moves[1][0], 0.5)
+        self.assertAlmostEqual(fake_gimbal.moves[1][1], 0.25)
 
 
 if __name__ == "__main__":

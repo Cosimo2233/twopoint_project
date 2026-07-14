@@ -625,35 +625,56 @@ def center_target(
     loop_hz: float,
     timeout: float,
     stable_frames: int,
+    stale_target_seconds: float,
+    stale_target_step_scale: float,
     on_frame: CenterFrameCallback | None = None,
 ) -> bool:
     deadline = time.monotonic() + timeout
     settled_frames = 0
+    cached_frame: Any | None = None
+    cached_at: float | None = None
 
     while time.monotonic() < deadline:
         loop_started_at = time.monotonic()
-        read_timeout = min(max(deadline - time.monotonic(), 0.0), 1.0)
-        try:
-            vision_frame = vision.read_latest(timeout=read_timeout)
-        except TimeoutError:
+        fresh = False
+        vision_frame = vision.read_nowait_latest()
+        if vision_frame is None and cached_frame is not None and cached_at is not None:
+            if loop_started_at - cached_at <= stale_target_seconds:
+                vision_frame = cached_frame
+            else:
+                cached_frame = None
+                cached_at = None
+
+        if vision_frame is None:
+            sleep_for_loop_rate(loop_started_at, loop_hz)
             continue
 
         captured = vision_frame.captured
         points = vision_frame.points
-        update = servo.update(gimbal, points)
+        fresh = vision_frame is not cached_frame
+        step_scale = 1.0 if fresh else stale_target_step_scale
+        update = servo.update(gimbal, points, step_scale=step_scale)
+        if fresh:
+            if update.valid:
+                cached_frame = vision_frame
+                cached_at = loop_started_at
+            else:
+                cached_frame = None
+                cached_at = None
         if on_frame is not None:
             on_frame(captured, points, update)
 
-        if update.settled:
+        if update.settled and fresh:
             settled_frames += 1
-        else:
+        elif not update.settled:
             settled_frames = 0
 
         if update.step is not None:
             print(
-                "center: frame={frame_id} err=({err_x:+.4f},{err_y:+.4f}) "
+                "center: frame={frame_id}{stale} err=({err_x:+.4f},{err_y:+.4f}) "
                 "step=({step_x:+.3f},{step_y:+.3f}) settled={settled}".format(
                     frame_id=captured.frame_id,
+                    stale="" if fresh else " stale",
                     err_x=update.step.error.x,
                     err_y=update.step.error.y,
                     step_x=update.step.x_delta_deg,
@@ -680,27 +701,50 @@ def track_target(
     gimbal: object,
     servo: TargetCenterServo,
     loop_hz: float,
+    stale_target_seconds: float,
+    stale_target_step_scale: float,
     stop_requested: StopCallback,
     on_frame: CenterFrameCallback | None = None,
 ) -> None:
+    cached_frame: Any | None = None
+    cached_at: float | None = None
+
     while not stop_requested():
         loop_started_at = time.monotonic()
-        try:
-            vision_frame = vision.read_latest(timeout=0.2)
-        except TimeoutError:
+        fresh = False
+        vision_frame = vision.read_nowait_latest()
+        if vision_frame is None and cached_frame is not None and cached_at is not None:
+            if loop_started_at - cached_at <= stale_target_seconds:
+                vision_frame = cached_frame
+            else:
+                cached_frame = None
+                cached_at = None
+
+        if vision_frame is None:
+            sleep_for_loop_rate(loop_started_at, loop_hz)
             continue
 
         captured = vision_frame.captured
         points = vision_frame.points
-        update = servo.update(gimbal, points)
+        fresh = vision_frame is not cached_frame
+        step_scale = 1.0 if fresh else stale_target_step_scale
+        update = servo.update(gimbal, points, step_scale=step_scale)
+        if fresh:
+            if update.valid:
+                cached_frame = vision_frame
+                cached_at = loop_started_at
+            else:
+                cached_frame = None
+                cached_at = None
         if on_frame is not None:
             on_frame(captured, points, update)
 
         if update.step is not None:
             print(
-                "track: frame={frame_id} err=({err_x:+.4f},{err_y:+.4f}) "
+                "track: frame={frame_id}{stale} err=({err_x:+.4f},{err_y:+.4f}) "
                 "step=({step_x:+.3f},{step_y:+.3f}) settled={settled}".format(
                     frame_id=captured.frame_id,
+                    stale="" if fresh else " stale",
                     err_x=update.step.error.x,
                     err_y=update.step.error.y,
                     step_x=update.step.x_delta_deg,
@@ -800,6 +844,8 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
                     loop_hz=task_config.center.loop_hz,
                     timeout=task_config.center.timeout,
                     stable_frames=task_config.center.stable_frames,
+                    stale_target_seconds=task_config.center.stale_target_seconds,
+                    stale_target_step_scale=task_config.center.stale_target_step_scale,
                     on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
                 )
 
@@ -888,6 +934,8 @@ def run_track(
                     loop_hz=task_config.center.loop_hz,
                     timeout=task_config.center.timeout,
                     stable_frames=task_config.center.stable_frames,
+                    stale_target_seconds=task_config.center.stale_target_seconds,
+                    stale_target_step_scale=task_config.center.stale_target_step_scale,
                     on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
                 )
 
@@ -916,6 +964,8 @@ def run_track(
                         gimbal=gimbal,
                         servo=servo,
                         loop_hz=task_config.center.loop_hz,
+                        stale_target_seconds=task_config.center.stale_target_seconds,
+                        stale_target_step_scale=task_config.center.stale_target_step_scale,
                         stop_requested=should_stop,
                         on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
                     )
@@ -940,6 +990,8 @@ def run_track(
                         gimbal=gimbal,
                         servo=servo,
                         loop_hz=task_config.center.loop_hz,
+                        stale_target_seconds=task_config.center.stale_target_seconds,
+                        stale_target_step_scale=task_config.center.stale_target_step_scale,
                         stop_requested=should_stop,
                         on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
                     )

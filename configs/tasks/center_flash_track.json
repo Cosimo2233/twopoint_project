@@ -25,20 +25,22 @@
       "x": {
         "kp": -12.0,
         "ki": 0.0,
-        "kd": 0.0,
+        "kd": 0.1,
         "integral_limit": 0.2,
-        "output_limit_deg": 1.0
+        "output_limit_deg": 5.0
       },
       "y": {
         "kp": 12.0,
         "ki": 0.0,
-        "kd": 0.0,
+        "kd": 0.1,
         "integral_limit": 0.2,
-        "output_limit_deg": 1.0
+        "output_limit_deg": 5.0
       }
     },
     "deadband": 0.006,
     "loop_hz": 15.0,
+    "stale_target_seconds": 0.3,
+    "stale_target_step_scale": 0.5,
     "timeout": 100.0,
     "stable_frames": 3
   },

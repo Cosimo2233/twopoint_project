@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import hypot
 import time
 from typing import Protocol, Sequence, TypedDict
@@ -228,7 +228,11 @@ class TargetCenterServo:
         self,
         gimbal: GimbalLike,
         points: Sequence[PointPrediction],
+        *,
+        step_scale: float = 1.0,
     ) -> AimUpdate:
+        if step_scale < 0:
+            raise ValueError("step_scale must be non-negative")
         target = select_target_center(points, conf_threshold=self.conf_threshold)
         if target is None:
             return AimUpdate(
@@ -251,10 +255,18 @@ class TargetCenterServo:
                 step=step,
             )
 
-        gimbal.move_by(step.x_delta_deg, step.y_delta_deg)
+        if step_scale != 1.0:
+            step = replace(
+                step,
+                x_delta_deg=step.x_delta_deg * step_scale,
+                y_delta_deg=step.y_delta_deg * step_scale,
+            )
+        moved = step.x_delta_deg != 0.0 or step.y_delta_deg != 0.0
+        if moved:
+            gimbal.move_by(step.x_delta_deg, step.y_delta_deg)
         return AimUpdate(
             valid=True,
-            moved=True,
+            moved=moved,
             settled=False,
             reason=None,
             target=target,

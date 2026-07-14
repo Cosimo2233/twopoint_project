@@ -25,6 +25,23 @@ class LatestVisionQueueTest(unittest.TestCase):
 
         self.assertEqual(latest.captured.frame_id, 3)
 
+    def test_read_nowait_latest_returns_none_when_empty(self) -> None:
+        queue = LatestVisionQueue()
+
+        self.assertIsNone(queue.read_nowait_latest())
+
+    def test_read_nowait_latest_drains_to_latest_frame(self) -> None:
+        queue = LatestVisionQueue()
+
+        queue.publish(make_frame(1))
+        queue.publish(make_frame(2))
+        latest = queue.read_nowait_latest()
+
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(latest.captured.frame_id, 2)
+        self.assertIsNone(queue.read_nowait_latest())
+
 
 if __name__ == "__main__":
     unittest.main()

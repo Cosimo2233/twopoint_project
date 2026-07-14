@@ -152,6 +152,8 @@ class CenterConfig:
     max_step_deg: float = 1.0
     deadband: float = 0.006
     loop_hz: float = 15.0
+    stale_target_seconds: float = 0.3
+    stale_target_step_scale: float = 0.5
     timeout: float = 100.0
     stable_frames: int = 3
     pid: PIDConfig | None = None
@@ -168,6 +170,12 @@ class CenterConfig:
         x_gain_deg = float(data.get("x_gain_deg", cls.x_gain_deg))
         y_gain_deg = float(data.get("y_gain_deg", cls.y_gain_deg))
         max_step_deg = float(data.get("max_step_deg", cls.max_step_deg))
+        stale_target_seconds = float(data.get("stale_target_seconds", cls.stale_target_seconds))
+        if stale_target_seconds < 0:
+            raise ValueError("center.stale_target_seconds must be non-negative")
+        stale_target_step_scale = float(data.get("stale_target_step_scale", cls.stale_target_step_scale))
+        if not 0.0 <= stale_target_step_scale <= 1.0:
+            raise ValueError("center.stale_target_step_scale must be between 0 and 1")
         pid_data = section(data, "pid") if "pid" in data else {}
         return cls(
             conf_threshold=conf_threshold,
@@ -178,6 +186,8 @@ class CenterConfig:
             max_step_deg=max_step_deg,
             deadband=float(data.get("deadband", cls.deadband)),
             loop_hz=float(data.get("loop_hz", cls.loop_hz)),
+            stale_target_seconds=stale_target_seconds,
+            stale_target_step_scale=stale_target_step_scale,
             timeout=timeout,
             stable_frames=stable_frames,
             pid=PIDConfig.from_dict(

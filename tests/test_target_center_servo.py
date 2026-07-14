@@ -110,6 +110,31 @@ class TargetCenterServoTest(unittest.TestCase):
         self.assertAlmostEqual(gimbal.moves[0][0], 1.0)
         self.assertAlmostEqual(gimbal.moves[0][1], 0.5)
 
+    def test_update_scales_step_when_requested(self) -> None:
+        servo = TargetCenterServo(
+            x_gain_deg=10.0,
+            y_gain_deg=-10.0,
+            max_step_deg=2.0,
+            deadband=0.01,
+            conf_threshold=0.5,
+        )
+        gimbal = FakeGimbal()
+
+        update = servo.update(
+            gimbal,
+            [{"label": "target_center", "x": 0.6, "y": 0.45, "confidence": 0.9}],
+            step_scale=0.5,
+        )
+
+        self.assertTrue(update.moved)
+        self.assertIsNotNone(update.step)
+        assert update.step is not None
+        self.assertAlmostEqual(update.step.x_delta_deg, 0.5)
+        self.assertAlmostEqual(update.step.y_delta_deg, 0.25)
+        self.assertEqual(len(gimbal.moves), 1)
+        self.assertAlmostEqual(gimbal.moves[0][0], 0.5)
+        self.assertAlmostEqual(gimbal.moves[0][1], 0.25)
+
     def test_pid_integral_contributes_to_repeated_steps(self) -> None:
         servo = TargetCenterServo(
             x_pid=PIDAxisGains(kp=0.0, ki=10.0, kd=0.0, integral_limit=1.0, output_limit_deg=10.0),
