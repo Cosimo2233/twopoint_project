@@ -5,7 +5,7 @@ from typing import Any, Protocol, TypedDict
 
 
 DEFAULT_VISION_BACKEND = "traditional"
-DEFAULT_ONNX_PATH = "model-bin/runs/twopoint/best.onnx"
+DEFAULT_ONNX_PATH = "model-bin/best2.onnx"
 DEFAULT_IMG_SIZE = 640
 
 

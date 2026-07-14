@@ -9,6 +9,12 @@ from typing import Protocol, Sequence, TypedDict
 TARGET_CENTER_LABEL = "target_center"
 
 
+def validate_conf_threshold(conf_threshold: float) -> float:
+    if not 0.0 <= conf_threshold <= 1.0:
+        raise ValueError("conf-threshold must be between 0 and 1")
+    return conf_threshold
+
+
 class PointPrediction(TypedDict):
     label: str
     x: float
@@ -57,6 +63,7 @@ def select_target_center(
     points: Sequence[PointPrediction],
     conf_threshold: float,
 ) -> TargetCenterObservation | None:
+    conf_threshold = validate_conf_threshold(conf_threshold)
     candidates = [
         point
         for point in points

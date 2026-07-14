@@ -6,6 +6,7 @@ from twopoint_project.contrl.target_center_servo import (
     TargetCenterObservation,
     TargetCenterServo,
     select_target_center,
+    validate_conf_threshold,
 )
 
 
@@ -40,6 +41,16 @@ class TargetCenterServoTest(unittest.TestCase):
         )
 
         self.assertIsNone(point)
+
+    def test_validate_conf_threshold_accepts_zero_to_one(self) -> None:
+        self.assertEqual(validate_conf_threshold(0.0), 0.0)
+        self.assertEqual(validate_conf_threshold(1.0), 1.0)
+
+    def test_validate_conf_threshold_rejects_out_of_range_values(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_conf_threshold(-0.1)
+        with self.assertRaises(ValueError):
+            validate_conf_threshold(1.1)
 
     def test_compute_step_uses_center_error_and_clamps(self) -> None:
         servo = TargetCenterServo(

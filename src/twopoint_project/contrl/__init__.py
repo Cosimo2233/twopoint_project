@@ -5,6 +5,7 @@ from twopoint_project.contrl.target_center_servo import (
     TargetCenterObservation,
     TargetCenterServo,
     select_target_center,
+    validate_conf_threshold,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "TargetCenterObservation",
     "TargetCenterServo",
     "select_target_center",
+    "validate_conf_threshold",
 ]

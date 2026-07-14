@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
 from twopoint_project.contrl.target_center_servo import (
     TargetCenterServo,
     sleep_for_loop_rate,
+    validate_conf_threshold,
 )
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
@@ -49,6 +50,11 @@ def env_str(name: str, default: str) -> str:
 def env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     return default if value is None or value == "" else int(value)
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    return default if value is None or value == "" else float(value)
 
 
 def open_camera_capture(
@@ -95,7 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-zero", action="store_true")
     parser.add_argument("--debug-frames", action="store_true")
 
-    parser.add_argument("--conf-threshold", type=float, default=0.5)
+    parser.add_argument("--conf-threshold", type=float, default=env_float("CENTER_CONF_THRESHOLD", 0.5))
     parser.add_argument("--center-x", type=float, default=0.5)
     parser.add_argument("--center-y", type=float, default=0.5)
     parser.add_argument("--x-gain-deg", type=float, default=8.0)
@@ -105,7 +111,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loop-hz", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--stable-frames", type=int, default=3)
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.conf_threshold = validate_conf_threshold(args.conf_threshold)
+    return args
 
 
 def run(args: argparse.Namespace) -> bool:
