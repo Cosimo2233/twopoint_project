@@ -31,8 +31,8 @@ from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     PointPrediction,
     TargetCenterServo,
+    control_conf_threshold,
     sleep_for_loop_rate,
-    validate_conf_threshold,
 )
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
@@ -269,11 +269,11 @@ def draw_aim_frame(
     frame_bgr: Any,
     points: list[PointPrediction],
     update: AimUpdate,
-    conf_threshold: float,
 ) -> Any:
     image = frame_bgr.copy()
     height, width = image.shape[:2]
     center = (width // 2, height // 2)
+    conf_threshold = control_conf_threshold()
 
     cv2.line(image, (center[0] - 18, center[1]), (center[0] + 18, center[1]), (255, 255, 255), 1, cv2.LINE_AA)
     cv2.line(image, (center[0], center[1] - 18), (center[0], center[1] + 18), (255, 255, 255), 1, cv2.LINE_AA)
@@ -557,7 +557,6 @@ class CenterRunMonitor:
         webrtc_port: int,
         backend: str,
         providers: list[str],
-        conf_threshold: float,
     ) -> None:
         self.enabled = enabled
         self.output_path = output_path
@@ -566,7 +565,6 @@ class CenterRunMonitor:
         self.webrtc_port = webrtc_port
         self.backend = backend
         self.providers = providers
-        self.conf_threshold = conf_threshold
         self.frame_buffer = LatestAnnotatedFrame()
         self.recorder = AnnotatedVideoRecorder(output_path, fps)
         self.server = CenterWebRtcServer(host=webrtc_host, port=webrtc_port, frame_buffer=self.frame_buffer)
@@ -586,7 +584,7 @@ class CenterRunMonitor:
         if not self.enabled:
             return
 
-        annotated = draw_aim_frame(captured.frame_bgr, points, update, self.conf_threshold)
+        annotated = draw_aim_frame(captured.frame_bgr, points, update)
         status = {
             "type": "vision_status",
             "task": "center_then_flash",
@@ -628,7 +626,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--x-id", type=int, default=env_int("F32C_X_ID", DEFAULT_X_ID))
     parser.add_argument("--y-id", type=int, default=env_int("F32C_Y_ID", DEFAULT_Y_ID))
     parser.add_argument("--speed-rpm", type=int, default=env_int("F32C_SPEED_RPM", DEFAULT_SPEED_RPM))
-    parser.add_argument("--init-zero", action=argparse.BooleanOptionalAction, default=env_bool("F32C_INIT_ZERO", True))
     parser.add_argument("--startup-delay", type=float, default=env_float("F32C_STARTUP_DELAY", DEFAULT_STARTUP_DELAY))
     parser.add_argument(
         "--command-interval",
@@ -642,11 +639,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--debug-frames", action="store_true")
 
-    parser.add_argument("--conf-threshold", type=float, default=env_float("CENTER_CONF_THRESHOLD", 0.5))
     parser.add_argument("--center-x", type=float, default=env_float("CENTER_TARGET_X", 0.5))
     parser.add_argument("--center-y", type=float, default=env_float("CENTER_TARGET_Y", 0.5))
-    parser.add_argument("--x-gain-deg", type=float, default=env_float("CENTER_X_GAIN_DEG", 8.0))
-    parser.add_argument("--y-gain-deg", type=float, default=env_float("CENTER_Y_GAIN_DEG", -8.0))
+    parser.add_argument("--x-gain-deg", type=float, default=env_float("CENTER_X_GAIN_DEG", -8.0))
+    parser.add_argument("--y-gain-deg", type=float, default=env_float("CENTER_Y_GAIN_DEG", 8.0))
     parser.add_argument("--max-step-deg", type=float, default=env_float("CENTER_MAX_STEP_DEG", 1.0))
     parser.add_argument("--deadband", type=float, default=env_float("CENTER_DEADBAND", 0.006))
     parser.add_argument("--loop-hz", type=float, default=env_float("CENTER_LOOP_HZ", 15.0))
@@ -679,7 +675,7 @@ def parse_args() -> argparse.Namespace:
         default=env_int("CENTER_RECORD_WEBRTC_PORT", env_int("WEBRTC_PORT", 8080)),
     )
     args = parser.parse_args()
-    args.conf_threshold = validate_conf_threshold(args.conf_threshold)
+    control_conf_threshold()
     if args.record_webrtc_fps <= 0:
         raise ValueError("record-webrtc-fps must be greater than 0")
     if args.record_webrtc_port <= 0:
@@ -695,7 +691,6 @@ def center_target(
     vision: VisionProducer,
     gimbal: object,
     servo: TargetCenterServo,
-    conf_threshold: float,
     loop_hz: float,
     timeout: float,
     stable_frames: int,
@@ -714,7 +709,7 @@ def center_target(
 
         captured = vision_frame.captured
         points = vision_frame.points
-        update = servo.update(gimbal, points, conf_threshold=conf_threshold)
+        update = servo.update(gimbal, points)
         if on_frame is not None:
             on_frame(captured, points, update)
 
@@ -781,7 +776,6 @@ def run(args: argparse.Namespace) -> bool:
         x_id=args.x_id,
         y_id=args.y_id,
         speed_rpm=args.speed_rpm,
-        init_zero=args.init_zero,
         startup_delay=args.startup_delay,
         command_interval=args.command_interval,
         enable_settle_delay=args.enable_settle_delay,
@@ -798,7 +792,6 @@ def run(args: argparse.Namespace) -> bool:
             webrtc_port=args.record_webrtc_port,
             backend=args.vision_backend,
             providers=inferencer.providers,
-            conf_threshold=args.conf_threshold,
         ) as monitor:
             print("task: center_then_flash")
             print(f"task: backend={args.vision_backend}")
@@ -815,7 +808,6 @@ def run(args: argparse.Namespace) -> bool:
                     vision=vision,
                     gimbal=gimbal,
                     servo=servo,
-                    conf_threshold=args.conf_threshold,
                     loop_hz=args.loop_hz,
                     timeout=args.center_timeout,
                     stable_frames=args.stable_frames,

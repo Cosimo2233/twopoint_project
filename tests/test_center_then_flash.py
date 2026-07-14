@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -83,12 +85,10 @@ def make_args() -> Namespace:
         x_id=1,
         y_id=2,
         speed_rpm=100,
-        init_zero=True,
         startup_delay=0,
         command_interval=0,
         enable_settle_delay=0,
         debug_frames=False,
-        conf_threshold=0.5,
         center_x=0.5,
         center_y=0.5,
         x_gain_deg=8.0,
@@ -102,10 +102,22 @@ def make_args() -> Namespace:
         vision_backend="traditional",
         onnx="model-bin/runs/twopoint/best.onnx",
         img_size=640,
+        record_webrtc=False,
+        record_webrtc_output="",
+        record_webrtc_fps=15.0,
+        record_webrtc_host="0.0.0.0",
+        record_webrtc_port=8080,
     )
 
 
 class CenterThenFlashTest(unittest.TestCase):
+    def test_parse_args_does_not_expose_initial_zero_config(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", ["prog"]):
+            args = center_then_flash.parse_args()
+
+        self.assertFalse(hasattr(args, "init_zero"))
+        self.assertFalse(hasattr(args, "conf_threshold"))
+
     def test_run_centers_then_turns_laser_on_and_disables_gimbal(self) -> None:
         fake_gimbal = FakeGimbal()
         fake_laser = FakeLaser()
@@ -114,7 +126,7 @@ class CenterThenFlashTest(unittest.TestCase):
             center_then_flash,
             "open_serial_gimbal",
             return_value=fake_gimbal,
-        ), patch.object(
+        ) as open_serial_gimbal, patch.object(
             center_then_flash,
             "open_laser_pointer",
             return_value=fake_laser,
@@ -131,6 +143,8 @@ class CenterThenFlashTest(unittest.TestCase):
             onnx_path="model-bin/runs/twopoint/best.onnx",
             img_size=640,
         )
+        open_serial_gimbal.assert_called_once()
+        self.assertNotIn("init_zero", open_serial_gimbal.call_args.kwargs)
         self.assertTrue(fake_gimbal.initialized)
         self.assertTrue(fake_gimbal.disabled)
         self.assertEqual(fake_gimbal.moves, [])

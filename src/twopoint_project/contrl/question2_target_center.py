@@ -19,8 +19,8 @@ if __package__ in {None, ""}:
 
 from twopoint_project.contrl.target_center_servo import (
     TargetCenterServo,
+    control_conf_threshold,
     sleep_for_loop_rate,
-    validate_conf_threshold,
 )
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
@@ -98,10 +98,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--startup-delay", type=float, default=DEFAULT_STARTUP_DELAY)
     parser.add_argument("--command-interval", type=float, default=DEFAULT_COMMAND_INTERVAL)
     parser.add_argument("--enable-settle-delay", type=float, default=DEFAULT_ENABLE_SETTLE_DELAY)
-    parser.add_argument("--no-zero", action="store_true")
     parser.add_argument("--debug-frames", action="store_true")
 
-    parser.add_argument("--conf-threshold", type=float, default=env_float("CENTER_CONF_THRESHOLD", 0.5))
     parser.add_argument("--center-x", type=float, default=0.5)
     parser.add_argument("--center-y", type=float, default=0.5)
     parser.add_argument("--x-gain-deg", type=float, default=8.0)
@@ -112,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--stable-frames", type=int, default=3)
     args = parser.parse_args()
-    args.conf_threshold = validate_conf_threshold(args.conf_threshold)
+    control_conf_threshold()
     return args
 
 
@@ -145,7 +143,6 @@ def run(args: argparse.Namespace) -> bool:
         x_id=args.x_id,
         y_id=args.y_id,
         speed_rpm=args.speed_rpm,
-        init_zero=not args.no_zero,
         startup_delay=args.startup_delay,
         command_interval=args.command_interval,
         enable_settle_delay=args.enable_settle_delay,
@@ -169,7 +166,7 @@ def run(args: argparse.Namespace) -> bool:
 
             captured = vision_frame.captured
             points = vision_frame.points
-            update = servo.update(gimbal, points, conf_threshold=args.conf_threshold)
+            update = servo.update(gimbal, points)
 
             if update.settled:
                 settled_frames += 1

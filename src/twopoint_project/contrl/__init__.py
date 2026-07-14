@@ -4,6 +4,7 @@ from twopoint_project.contrl.target_center_servo import (
     GimbalStep,
     TargetCenterObservation,
     TargetCenterServo,
+    control_conf_threshold,
     select_target_center,
     validate_conf_threshold,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "GimbalStep",
     "TargetCenterObservation",
     "TargetCenterServo",
+    "control_conf_threshold",
     "select_target_center",
     "validate_conf_threshold",
 ]

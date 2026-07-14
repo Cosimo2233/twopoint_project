@@ -26,13 +26,6 @@ from twopoint_project.f32c.gimbal import (
 )
 
 
-def env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None or value == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def env_float(name: str, default: float) -> float:
     value = os.getenv(name)
     return default if value is None or value == "" else float(value)
@@ -62,7 +55,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--x-id", type=int, default=env_int("F32C_X_ID", DEFAULT_X_ID))
     parser.add_argument("--y-id", type=int, default=env_int("F32C_Y_ID", DEFAULT_Y_ID))
     parser.add_argument("--speed-rpm", type=int, default=env_int("F32C_SPEED_RPM", DEFAULT_SPEED_RPM))
-    parser.add_argument("--init-zero", action=argparse.BooleanOptionalAction, default=env_bool("F32C_INIT_ZERO", True))
     parser.add_argument(
         "--startup-delay",
         type=float,
@@ -83,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     enable = subparsers.add_parser("enable", help="Enable both gimbal motors only.")
     add_command_debug_option(enable)
-    init = subparsers.add_parser("init", help="Initialize and optionally zero the gimbal.")
+    init = subparsers.add_parser("init", help="Initialize the gimbal without zeroing.")
     add_command_debug_option(init)
     disable = subparsers.add_parser("disable", help="Disable both gimbal motors.")
     add_command_debug_option(disable)
@@ -117,7 +109,6 @@ def build_gimbal(args: argparse.Namespace):
         x_id=args.x_id,
         y_id=args.y_id,
         speed_rpm=args.speed_rpm,
-        init_zero=args.init_zero,
         startup_delay=args.startup_delay,
         command_interval=args.command_interval,
         enable_settle_delay=args.enable_settle_delay,

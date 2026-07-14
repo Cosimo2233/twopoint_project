@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 from twopoint_project.contrl.target_center_servo import (
     TargetCenterObservation,
     TargetCenterServo,
+    control_conf_threshold,
     select_target_center,
     validate_conf_threshold,
 )
@@ -20,13 +23,13 @@ class FakeGimbal:
 
 class TargetCenterServoTest(unittest.TestCase):
     def test_select_target_center_ignores_laser_point(self) -> None:
-        point = select_target_center(
-            [
-                {"label": "laser_point", "x": 0.1, "y": 0.2, "confidence": 0.99},
-                {"label": "target_center", "x": 0.6, "y": 0.4, "confidence": 0.8},
-            ],
-            conf_threshold=0.5,
-        )
+        with patch.dict(os.environ, {"CENTER_CONF_THRESHOLD": "0.5"}):
+            point = select_target_center(
+                [
+                    {"label": "laser_point", "x": 0.1, "y": 0.2, "confidence": 0.99},
+                    {"label": "target_center", "x": 0.6, "y": 0.4, "confidence": 0.8},
+                ],
+            )
 
         self.assertIsNotNone(point)
         assert point is not None
@@ -35,12 +38,16 @@ class TargetCenterServoTest(unittest.TestCase):
         self.assertEqual(point.confidence, 0.8)
 
     def test_select_target_center_returns_none_below_threshold(self) -> None:
-        point = select_target_center(
-            [{"label": "target_center", "x": 0.6, "y": 0.4, "confidence": 0.4}],
-            conf_threshold=0.5,
-        )
+        with patch.dict(os.environ, {"CENTER_CONF_THRESHOLD": "0.5"}):
+            point = select_target_center(
+                [{"label": "target_center", "x": 0.6, "y": 0.4, "confidence": 0.4}],
+            )
 
         self.assertIsNone(point)
+
+    def test_control_conf_threshold_reads_env(self) -> None:
+        with patch.dict(os.environ, {"CENTER_CONF_THRESHOLD": "0.73"}):
+            self.assertEqual(control_conf_threshold(), 0.73)
 
     def test_validate_conf_threshold_accepts_zero_to_one(self) -> None:
         self.assertEqual(validate_conf_threshold(0.0), 0.0)
@@ -72,11 +79,11 @@ class TargetCenterServoTest(unittest.TestCase):
         servo = TargetCenterServo(deadband=0.01)
         gimbal = FakeGimbal()
 
-        update = servo.update(
-            gimbal,
-            [{"label": "target_center", "x": 0.505, "y": 0.495, "confidence": 0.9}],
-            conf_threshold=0.5,
-        )
+        with patch.dict(os.environ, {"CENTER_CONF_THRESHOLD": "0.5"}):
+            update = servo.update(
+                gimbal,
+                [{"label": "target_center", "x": 0.505, "y": 0.495, "confidence": 0.9}],
+            )
 
         self.assertTrue(update.valid)
         self.assertTrue(update.settled)
@@ -87,11 +94,11 @@ class TargetCenterServoTest(unittest.TestCase):
         servo = TargetCenterServo(x_gain_deg=10.0, y_gain_deg=-10.0, max_step_deg=2.0, deadband=0.01)
         gimbal = FakeGimbal()
 
-        update = servo.update(
-            gimbal,
-            [{"label": "target_center", "x": 0.6, "y": 0.45, "confidence": 0.9}],
-            conf_threshold=0.5,
-        )
+        with patch.dict(os.environ, {"CENTER_CONF_THRESHOLD": "0.5"}):
+            update = servo.update(
+                gimbal,
+                [{"label": "target_center", "x": 0.6, "y": 0.45, "confidence": 0.9}],
+            )
 
         self.assertTrue(update.valid)
         self.assertFalse(update.settled)

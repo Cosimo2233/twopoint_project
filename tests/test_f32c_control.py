@@ -38,24 +38,12 @@ class F32CMotorTest(unittest.TestCase):
         self.assertEqual(serial_port.writes[0], protocol.build_multi_turn_angle(1, 10))
         self.assertEqual(serial_port.writes[1], protocol.build_multi_turn_angle(1, 15))
 
-    def test_zero_multi_turn_angle_resets_local_target(self) -> None:
-        serial_port = FakeSerial()
-        motor = F32CMotor(serial_port, 1, command_interval=0)
-
-        motor.move_by_angle(10)
-        motor.zero_multi_turn_angle()
-
-        self.assertEqual(motor.target_angle_deg, 0)
-        self.assertEqual(serial_port.writes[-1], protocol.build_zero_multi_turn_angle(1))
-
-
 class F32CGimbalTest(unittest.TestCase):
     def test_initialize_order(self) -> None:
         serial_port = FakeSerial()
         gimbal = F32CGimbal(
             serial_port,
             speed_rpm=100,
-            init_zero=True,
             startup_delay=0,
             command_interval=0,
             enable_settle_delay=0,
@@ -72,8 +60,6 @@ class F32CGimbalTest(unittest.TestCase):
                 protocol.build_set_multi_turn_passthrough(2),
                 protocol.build_set_speed(1, 100),
                 protocol.build_set_speed(2, 100),
-                protocol.build_zero_multi_turn_angle(1),
-                protocol.build_zero_multi_turn_angle(2),
             ],
         )
 

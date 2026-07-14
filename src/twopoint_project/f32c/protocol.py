@@ -17,7 +17,6 @@ class Command(IntEnum):
     ENABLE = 0x06
     SET_ACCELERATION = 0x07
     SAVE_PARAMETERS = 0x08
-    ZERO_MULTI_TURN_ANGLE = 0x09
     ZERO_SINGLE_TURN_ANGLE = 0x0A
     RESTORE_FACTORY = 0x0B
     SET_ADDRESS = 0x0D
@@ -81,10 +80,6 @@ def build_multi_turn_angle(motor_id: int, angle_deg: float) -> bytes:
         Command.SET_MULTI_TURN_ANGLE,
         scaled_angle.to_bytes(4, "big", signed=True),
     )
-
-
-def build_zero_multi_turn_angle(motor_id: int) -> bytes:
-    return build_frame(motor_id, Command.ZERO_MULTI_TURN_ANGLE)
 
 
 def build_request_feedback(motor_id: int, feedback_type: int | FeedbackType) -> bytes:

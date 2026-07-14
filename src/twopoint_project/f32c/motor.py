@@ -38,10 +38,6 @@ class F32CMotor:
     def set_speed_rpm(self, rpm: int) -> None:
         self._send(protocol.build_set_speed(self.motor_id, abs(int(rpm))))
 
-    def zero_multi_turn_angle(self) -> None:
-        self._send(protocol.build_zero_multi_turn_angle(self.motor_id))
-        self.target_angle_deg = 0.0
-
     def move_to_angle(self, angle_deg: float) -> None:
         self.target_angle_deg = float(angle_deg)
         self._send(protocol.build_multi_turn_angle(self.motor_id, self.target_angle_deg))

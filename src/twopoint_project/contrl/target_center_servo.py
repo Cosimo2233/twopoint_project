@@ -2,17 +2,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import hypot
+import os
 import time
 from typing import Protocol, Sequence, TypedDict
 
 
 TARGET_CENTER_LABEL = "target_center"
+CONTROL_CONF_THRESHOLD_ENV = "CENTER_CONF_THRESHOLD"
+DEFAULT_CONTROL_CONF_THRESHOLD = 0.5
 
 
 def validate_conf_threshold(conf_threshold: float) -> float:
     if not 0.0 <= conf_threshold <= 1.0:
         raise ValueError("conf-threshold must be between 0 and 1")
     return conf_threshold
+
+
+def control_conf_threshold() -> float:
+    value = os.getenv(CONTROL_CONF_THRESHOLD_ENV)
+    if value is None or value == "":
+        return DEFAULT_CONTROL_CONF_THRESHOLD
+    return validate_conf_threshold(float(value))
 
 
 class PointPrediction(TypedDict):
@@ -61,9 +71,8 @@ class AimUpdate:
 
 def select_target_center(
     points: Sequence[PointPrediction],
-    conf_threshold: float,
 ) -> TargetCenterObservation | None:
-    conf_threshold = validate_conf_threshold(conf_threshold)
+    conf_threshold = control_conf_threshold()
     candidates = [
         point
         for point in points
@@ -131,10 +140,8 @@ class TargetCenterServo:
         self,
         gimbal: GimbalLike,
         points: Sequence[PointPrediction],
-        *,
-        conf_threshold: float,
     ) -> AimUpdate:
-        target = select_target_center(points, conf_threshold)
+        target = select_target_center(points)
         if target is None:
             return AimUpdate(
                 valid=False,

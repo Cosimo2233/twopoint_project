@@ -29,7 +29,6 @@ class F32CGimbal:
         x_id: int = DEFAULT_X_ID,
         y_id: int = DEFAULT_Y_ID,
         speed_rpm: int = DEFAULT_SPEED_RPM,
-        init_zero: bool = True,
         startup_delay: float = DEFAULT_STARTUP_DELAY,
         command_interval: float = DEFAULT_COMMAND_INTERVAL,
         enable_settle_delay: float = DEFAULT_ENABLE_SETTLE_DELAY,
@@ -39,7 +38,6 @@ class F32CGimbal:
         self.x = F32CMotor(serial_port, x_id, command_interval=command_interval, debug_frames=debug_frames)
         self.y = F32CMotor(serial_port, y_id, command_interval=command_interval, debug_frames=debug_frames)
         self.speed_rpm = speed_rpm
-        self.init_zero = init_zero
         self.startup_delay = startup_delay
         self.enable_settle_delay = enable_settle_delay
 
@@ -62,11 +60,8 @@ class F32CGimbal:
             time.sleep(self.enable_settle_delay)
         self.set_multi_turn_passthrough()
         self.set_speed_rpm(self.speed_rpm)
-        if self.init_zero:
-            self.zero_multi_turn_angle()
-        else:
-            self.x.target_angle_deg = 0.0
-            self.y.target_angle_deg = 0.0
+        self.x.target_angle_deg = 0.0
+        self.y.target_angle_deg = 0.0
 
     def enable(self) -> None:
         self.x.enable()
@@ -79,10 +74,6 @@ class F32CGimbal:
     def set_speed_rpm(self, rpm: int) -> None:
         self.x.set_speed_rpm(rpm)
         self.y.set_speed_rpm(rpm)
-
-    def zero_multi_turn_angle(self) -> None:
-        self.x.zero_multi_turn_angle()
-        self.y.zero_multi_turn_angle()
 
     def move_by(self, x_delta_deg: float, y_delta_deg: float) -> None:
         self.x.move_by_angle(x_delta_deg)
@@ -109,7 +100,6 @@ def open_serial_gimbal(
     x_id: int = DEFAULT_X_ID,
     y_id: int = DEFAULT_Y_ID,
     speed_rpm: int = DEFAULT_SPEED_RPM,
-    init_zero: bool = True,
     startup_delay: float = DEFAULT_STARTUP_DELAY,
     command_interval: float = DEFAULT_COMMAND_INTERVAL,
     enable_settle_delay: float = DEFAULT_ENABLE_SETTLE_DELAY,
@@ -142,7 +132,6 @@ def open_serial_gimbal(
         x_id=x_id,
         y_id=y_id,
         speed_rpm=speed_rpm,
-        init_zero=init_zero,
         startup_delay=startup_delay,
         command_interval=command_interval,
         enable_settle_delay=enable_settle_delay,

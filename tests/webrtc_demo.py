@@ -38,7 +38,7 @@ from twopoint_project.contrl.center_then_flash import (
 from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     TargetCenterServo,
-    validate_conf_threshold,
+    control_conf_threshold,
 )
 from twopoint_project.vision.inferencer import DEFAULT_IMG_SIZE, build_vision_inferencer
 from twopoint_project.vision.pipeline import VisionProducer
@@ -285,7 +285,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--onnx", default=env_str("TWOPOINT_ONNX_PATH", "model-bin/best.onnx").strip())
     parser.add_argument("--img-size", type=int, default=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE))
-    parser.add_argument("--conf-threshold", type=float, default=env_float("CENTER_CONF_THRESHOLD", 0.5))
     parser.add_argument("--center-x", type=float, default=env_float("CENTER_TARGET_X", 0.5))
     parser.add_argument("--center-y", type=float, default=env_float("CENTER_TARGET_Y", 0.5))
     parser.add_argument("--x-gain-deg", type=float, default=env_float("CENTER_X_GAIN_DEG", 8.0))
@@ -293,7 +292,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-step-deg", type=float, default=env_float("CENTER_MAX_STEP_DEG", 1.0))
     parser.add_argument("--deadband", type=float, default=env_float("CENTER_DEADBAND", 0.006))
     args = parser.parse_args()
-    args.conf_threshold = validate_conf_threshold(args.conf_threshold)
+    control_conf_threshold()
     return args
 
 
@@ -370,16 +369,12 @@ class DemoResources:
             raise RuntimeError(self.camera_error)
 
         vision_frame = self.vision.read_latest(timeout=1.0)
-        update = self.servo.update(
-            self.noop_gimbal,
-            vision_frame.points,
-            conf_threshold=self.args.conf_threshold,
-        )
+        update = self.servo.update(self.noop_gimbal, vision_frame.points)
         annotated = draw_aim_frame(
             vision_frame.captured.frame_bgr,
             vision_frame.points,
             update,
-            self.args.conf_threshold,
+            control_conf_threshold(),
         )
         return annotated, self.status_for(vision_frame, update)
 
