@@ -4,16 +4,20 @@ import asyncio
 from dataclasses import asdict, is_dataclass
 import json
 from pathlib import Path
+import select
 import socket
 import subprocess
+import sys
+import termios
 import threading
 import time
+import tty
 from typing import Any, Callable
 
 import cv2
 import numpy as np
 
-from twopoint_project.config import CenterThenFlashConfig, RuntimeConfig
+from twopoint_project.config import CenterFlashTrackConfig, CenterThenFlashConfig, RuntimeConfig
 from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     PointPrediction,
@@ -27,6 +31,7 @@ from twopoint_project.vision.pipeline import VisionProducer
 
 
 CenterFrameCallback = Callable[[Any, list[PointPrediction], AimUpdate], None]
+StopCallback = Callable[[], bool]
 DEFAULT_MONITOR_OUTPUT_DIR = Path("outputs")
 WEBRTC_INDEX_HTML = """<!doctype html>
 <html lang="zh-CN">
@@ -150,6 +155,11 @@ WEBRTC_INDEX_HTML = """<!doctype html>
       pc = new RTCPeerConnection({ iceServers: [] });
       const channel = pc.createDataChannel("status");
       channel.onmessage = (event) => renderStatus(JSON.parse(event.data));
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && channel.readyState === "open") {
+          channel.send(JSON.stringify({ type: "stop" }));
+        }
+      });
       pc.addTransceiver("video", { direction: "recvonly" });
       pc.ontrack = (event) => { video.srcObject = event.streams[0]; };
       pc.onconnectionstatechange = () => { connection.textContent = pc.connectionState; };
@@ -371,10 +381,12 @@ class CenterWebRtcServer:
         host: str,
         port: int,
         frame_buffer: LatestAnnotatedFrame,
+        stop_event: threading.Event,
     ) -> None:
         self.host = host
         self.port = port
         self.frame_buffer = frame_buffer
+        self.stop_event = stop_event
         self.broadcaster = WebRtcStatusBroadcaster()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -461,6 +473,15 @@ class CenterWebRtcServer:
                 def on_close() -> None:
                     broadcaster.discard(channel)
 
+                @channel.on("message")
+                def on_message(message: str) -> None:
+                    try:
+                        data = json.loads(message)
+                    except json.JSONDecodeError:
+                        return
+                    if isinstance(data, dict) and data.get("type") == "stop":
+                        self.stop_event.set()
+
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
                 if pc.connectionState in {"failed", "closed"}:
@@ -517,8 +538,14 @@ class CenterRunMonitor:
         self.providers = providers
         self.conf_threshold = conf_threshold
         self.frame_buffer = LatestAnnotatedFrame()
+        self.stop_event = threading.Event()
         self.recorder = AnnotatedVideoRecorder(output_path, fps)
-        self.server = CenterWebRtcServer(host=webrtc_host, port=webrtc_port, frame_buffer=self.frame_buffer)
+        self.server = CenterWebRtcServer(
+            host=webrtc_host,
+            port=webrtc_port,
+            frame_buffer=self.frame_buffer,
+            stop_event=self.stop_event,
+        )
 
     def __enter__(self) -> CenterRunMonitor:
         if self.enabled:
@@ -554,6 +581,36 @@ class CenterRunMonitor:
         }
         self.recorder.write(annotated)
         self.frame_buffer.publish(annotated, status)
+
+    def stop_requested(self) -> bool:
+        return self.stop_event.is_set()
+
+
+class EscKeyStopper:
+    def __init__(self) -> None:
+        self.enabled = sys.stdin.isatty()
+        self._old_settings: list[Any] | None = None
+
+    def __enter__(self) -> EscKeyStopper:
+        if self.enabled:
+            self._old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            print("track: press Esc to stop safely")
+        else:
+            print("track: stdin is not a TTY; press Ctrl+C to stop safely")
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        if self.enabled and self._old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
+    def should_stop(self) -> bool:
+        if not self.enabled:
+            return False
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return False
+        return sys.stdin.read(1) == "\x1b"
 
 
 def center_target(
@@ -613,11 +670,66 @@ def center_target(
     return False
 
 
-def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bool:
+def track_target(
+    *,
+    vision: VisionProducer,
+    gimbal: object,
+    servo: TargetCenterServo,
+    loop_hz: float,
+    stop_requested: StopCallback,
+    on_frame: CenterFrameCallback | None = None,
+) -> None:
+    while not stop_requested():
+        loop_started_at = time.monotonic()
+        try:
+            vision_frame = vision.read_latest(timeout=0.2)
+        except TimeoutError:
+            continue
+
+        captured = vision_frame.captured
+        points = vision_frame.points
+        update = servo.update(gimbal, points)
+        if on_frame is not None:
+            on_frame(captured, points, update)
+
+        if update.step is not None:
+            print(
+                "track: frame={frame_id} err=({err_x:+.4f},{err_y:+.4f}) "
+                "step=({step_x:+.3f},{step_y:+.3f}) settled={settled}".format(
+                    frame_id=captured.frame_id,
+                    err_x=update.step.error.x,
+                    err_y=update.step.error.y,
+                    step_x=update.step.x_delta_deg,
+                    step_y=update.step.y_delta_deg,
+                    settled=update.settled,
+                )
+            )
+        else:
+            print(f"track: frame={captured.frame_id} target_center invalid: {update.reason}")
+
+        sleep_for_loop_rate(loop_started_at, loop_hz)
+
+    print("track: stop requested")
+
+
+def sleep_with_stop(seconds: float, stop_requested: StopCallback) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if stop_requested():
+            return True
+        time.sleep(min(0.05, max(deadline - time.monotonic(), 0.0)))
+    return stop_requested()
+
+
+def validate_runtime(task_config: CenterThenFlashConfig | CenterFlashTrackConfig, runtime_config: RuntimeConfig) -> None:
     if runtime_config.webrtc.enabled and task_config.center.loop_hz <= 0:
         raise ValueError("center.loop_hz must be greater than 0 when WebRTC is enabled")
     if runtime_config.webrtc.port <= 0:
         raise ValueError("TWOPOINT_WEBRTC_PORT must be greater than 0")
+
+
+def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bool:
+    validate_runtime(task_config, runtime_config)
 
     inferencer = build_vision_inferencer(
         backend=runtime_config.vision.backend,
@@ -693,6 +805,140 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
                 else:
                     print("laser: skipped because centering did not settle")
                 return centered
+            finally:
+                laser.off()
+                gimbal.disable()
+
+
+def run_track(
+    task_config: CenterFlashTrackConfig,
+    runtime_config: RuntimeConfig,
+    stop_requested: StopCallback | None = None,
+) -> bool:
+    validate_runtime(task_config, runtime_config)
+
+    inferencer = build_vision_inferencer(
+        backend=runtime_config.vision.backend,
+        onnx_path=runtime_config.vision.onnx_path,
+        img_size=runtime_config.vision.img_size,
+    )
+    servo = TargetCenterServo(
+        center_x=task_config.center.target_x,
+        center_y=task_config.center.target_y,
+        x_gain_deg=task_config.center.x_gain_deg,
+        y_gain_deg=task_config.center.y_gain_deg,
+        max_step_deg=task_config.center.max_step_deg,
+        deadband=task_config.center.deadband,
+        conf_threshold=task_config.center.conf_threshold,
+    )
+    monitor_output_path = default_monitor_output_path(task_config.mode)
+
+    with open_camera_capture(
+        camera_index=task_config.camera.index,
+        width=task_config.camera.width,
+        height=task_config.camera.height,
+        fps=task_config.camera.fps,
+    ) as capture, open_serial_gimbal(
+        port=task_config.f32c.port,
+        baudrate=task_config.f32c.baudrate,
+        x_id=task_config.f32c.x_id,
+        y_id=task_config.f32c.y_id,
+        speed_rpm=task_config.f32c.speed_rpm,
+        startup_delay=task_config.f32c.startup_delay,
+        command_interval=task_config.f32c.command_interval,
+        enable_settle_delay=task_config.f32c.enable_settle_delay,
+        debug_frames=task_config.f32c.debug_frames,
+    ) as gimbal, VisionProducer(
+        capture=capture,
+        inferencer=inferencer,
+    ) as vision, open_laser_pointer(initial_on=False) as laser:
+        with CenterRunMonitor(
+            enabled=runtime_config.webrtc.enabled,
+            output_path=monitor_output_path,
+            fps=task_config.center.loop_hz,
+            webrtc_host=runtime_config.webrtc.host,
+            webrtc_port=runtime_config.webrtc.port,
+            backend=runtime_config.vision.backend,
+            providers=inferencer.providers,
+            conf_threshold=task_config.center.conf_threshold,
+        ) as monitor:
+            print(f"task: {task_config.mode}")
+            print(f"task: backend={runtime_config.vision.backend}")
+            print(f"task: providers={inferencer.providers}")
+            print(f"task: center_timeout={task_config.center.timeout:.2f}s")
+            print(f"task: laser_hold_seconds={task_config.laser.hold_seconds:.2f}s")
+            print(f"monitor: record_webrtc={runtime_config.webrtc.enabled}")
+
+            laser.off()
+            gimbal.initialize()
+
+            try:
+                centered = center_target(
+                    vision=vision,
+                    gimbal=gimbal,
+                    servo=servo,
+                    loop_hz=task_config.center.loop_hz,
+                    timeout=task_config.center.timeout,
+                    stable_frames=task_config.center.stable_frames,
+                    on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                )
+
+                stopper_context = EscKeyStopper() if stop_requested is None else None
+                if stopper_context is None:
+                    external_stop_requested = stop_requested
+                    print("track: using injected stop callback")
+                    if external_stop_requested is None:
+                        raise RuntimeError("stop callback is not available")
+
+                    def should_stop() -> bool:
+                        return monitor.stop_requested() or external_stop_requested()
+
+                    if centered or task_config.behavior.fire_after_timeout:
+                        print("laser: on")
+                        laser.on()
+                        stopped_during_fire = sleep_with_stop(task_config.laser.hold_seconds, should_stop)
+                        print("laser: off")
+                        laser.off()
+                        if stopped_during_fire:
+                            return centered
+                    else:
+                        print("laser: skipped because centering did not settle")
+                    track_target(
+                        vision=vision,
+                        gimbal=gimbal,
+                        servo=servo,
+                        loop_hz=task_config.center.loop_hz,
+                        stop_requested=should_stop,
+                        on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                    )
+                    return centered
+
+                with stopper_context as stopper:
+                    def should_stop() -> bool:
+                        return monitor.stop_requested() or stopper.should_stop()
+
+                    if centered or task_config.behavior.fire_after_timeout:
+                        print("laser: on")
+                        laser.on()
+                        stopped_during_fire = sleep_with_stop(task_config.laser.hold_seconds, should_stop)
+                        print("laser: off")
+                        laser.off()
+                        if stopped_during_fire:
+                            return centered
+                    else:
+                        print("laser: skipped because centering did not settle")
+                    track_target(
+                        vision=vision,
+                        gimbal=gimbal,
+                        servo=servo,
+                        loop_hz=task_config.center.loop_hz,
+                        stop_requested=should_stop,
+                        on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                    )
+                return centered
+            except KeyboardInterrupt:
+                print("track: interrupted")
+                return False
             finally:
                 laser.off()
                 gimbal.disable()

@@ -13,6 +13,10 @@ def run_task(task_config: TaskConfig, runtime_config: RuntimeConfig) -> bool:
         from twopoint_project.tasks.center_then_flash import run
 
         return run(task_config, runtime_config)
+    if task_config.mode == "center_flash_track":
+        from twopoint_project.tasks.center_flash_track import run
+
+        return run(task_config, runtime_config)
     if isinstance(task_config, UnsupportedTaskConfig):
         raise NotImplementedError(f"task mode is registered but not implemented yet: {task_config.mode}")
     raise ValueError(f"unsupported task mode: {task_config.mode}")

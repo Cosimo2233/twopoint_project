@@ -7,6 +7,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from twopoint_project.command.app import app
+from twopoint_project.config import load_task_config
 
 
 class CommandAppTest(unittest.TestCase):
@@ -42,6 +43,13 @@ class CommandAppTest(unittest.TestCase):
         self.assertFalse(runtime_config.webrtc.enabled)
         self.assertEqual(runtime_config.webrtc.host, "127.0.0.1")
         self.assertEqual(runtime_config.webrtc.port, 18080)
+
+    def test_center_flash_track_config_loads_as_implemented_mode(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        task_config = load_task_config(repo_root / "configs/tasks/center_flash_track.json")
+
+        self.assertEqual(task_config.mode, "center_flash_track")
+        self.assertFalse(task_config.behavior.exit_after_fire)
 
 
 if __name__ == "__main__":

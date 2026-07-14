@@ -203,7 +203,31 @@ class CenterThenFlashConfig:
         )
 
 
-TaskConfig = CenterThenFlashConfig | UnsupportedTaskConfig
+@dataclass(frozen=True)
+class CenterFlashTrackConfig:
+    mode: str
+    camera: CameraConfig
+    f32c: F32CConfig
+    center: CenterConfig
+    laser: LaserConfig
+    behavior: BehaviorConfig
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CenterFlashTrackConfig:
+        mode = str(data.get("mode", ""))
+        if mode != "center_flash_track":
+            raise ValueError(f"center_flash_track config must declare mode='center_flash_track', got {mode!r}")
+        return cls(
+            mode=mode,
+            camera=CameraConfig.from_dict(section(data, "camera")),
+            f32c=F32CConfig.from_dict(section(data, "f32c")),
+            center=CenterConfig.from_dict(section(data, "center")),
+            laser=LaserConfig.from_dict(section(data, "laser")),
+            behavior=BehaviorConfig.from_dict(section(data, "behavior")),
+        )
+
+
+TaskConfig = CenterThenFlashConfig | CenterFlashTrackConfig | UnsupportedTaskConfig
 
 
 def runtime_config_from_env(config_path: Path | None = None) -> RuntimeConfig:
@@ -232,6 +256,8 @@ def load_task_config(path: Path) -> TaskConfig:
         raise ValueError("task config must include mode")
     if mode == "center_then_flash":
         return CenterThenFlashConfig.from_dict(data)
-    if mode in {"search_center_then_flash", "center_flash_track"}:
+    if mode == "center_flash_track":
+        return CenterFlashTrackConfig.from_dict(data)
+    if mode == "search_center_then_flash":
         return UnsupportedTaskConfig(mode=mode, raw=data)
     raise ValueError(f"unsupported task mode: {mode}")

@@ -11,6 +11,7 @@ from twopoint_project.config import (
     BehaviorConfig,
     CameraConfig,
     CenterConfig,
+    CenterFlashTrackConfig,
     CenterThenFlashConfig,
     F32CConfig,
     LaserConfig,
@@ -128,6 +129,48 @@ def make_runtime_config() -> RuntimeConfig:
     )
 
 
+def make_track_config() -> CenterFlashTrackConfig:
+    return CenterFlashTrackConfig(
+        mode="center_flash_track",
+        camera=CameraConfig(index=0, width=640, height=480, fps=30),
+        f32c=F32CConfig(
+            port="/dev/null",
+            baudrate=115200,
+            x_id=1,
+            y_id=2,
+            speed_rpm=100,
+            startup_delay=0,
+            command_interval=0,
+            enable_settle_delay=0,
+            debug_frames=False,
+        ),
+        center=CenterConfig(
+            conf_threshold=0.5,
+            target_x=0.5,
+            target_y=0.5,
+            x_gain_deg=8.0,
+            y_gain_deg=-8.0,
+            max_step_deg=1.0,
+            deadband=0.006,
+            loop_hz=0,
+            timeout=2.0,
+            stable_frames=1,
+        ),
+        laser=LaserConfig(hold_seconds=0),
+        behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=False),
+    )
+
+
+class StopAfterCalls:
+    def __init__(self, calls: int) -> None:
+        self.calls = 0
+        self.limit = calls
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return self.calls >= self.limit
+
+
 class CenterThenFlashTest(unittest.TestCase):
     def test_run_centers_then_turns_laser_on_and_disables_gimbal(self) -> None:
         fake_gimbal = FakeGimbal()
@@ -159,6 +202,33 @@ class CenterThenFlashTest(unittest.TestCase):
         self.assertTrue(fake_gimbal.initialized)
         self.assertTrue(fake_gimbal.disabled)
         self.assertEqual(fake_gimbal.moves, [])
+        self.assertIn("on", fake_laser.events)
+        self.assertEqual(fake_laser.events[-1], "off")
+
+    def test_track_mode_fires_then_keeps_aiming_until_stop_requested(self) -> None:
+        fake_gimbal = FakeGimbal()
+        fake_laser = FakeLaser()
+        stop_requested = StopAfterCalls(3)
+
+        with patch.object(center_then_flash, "open_camera_capture", return_value=FakeCapture()), patch.object(
+            center_then_flash,
+            "open_serial_gimbal",
+            return_value=fake_gimbal,
+        ), patch.object(
+            center_then_flash,
+            "open_laser_pointer",
+            return_value=fake_laser,
+        ), patch.object(
+            center_then_flash,
+            "build_vision_inferencer",
+            return_value=FakeInferencer(),
+        ):
+            result = center_then_flash.run_track(make_track_config(), make_runtime_config(), stop_requested)
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(stop_requested.calls, 3)
+        self.assertTrue(fake_gimbal.initialized)
+        self.assertTrue(fake_gimbal.disabled)
         self.assertIn("on", fake_laser.events)
         self.assertEqual(fake_laser.events[-1], "off")
 
