@@ -38,6 +38,7 @@ from twopoint_project.vision.inferencer import (
     DEFAULT_VISION_BACKEND,
     build_vision_inferencer,
 )
+from twopoint_project.vision.pipeline import VisionProducer
 
 
 def env_str(name: str, default: str) -> str:
@@ -48,6 +49,23 @@ def env_str(name: str, default: str) -> str:
 def env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     return default if value is None or value == "" else int(value)
+
+
+def open_camera_capture(
+    *,
+    camera_index: int,
+    width: int | None,
+    height: int | None,
+    fps: int | None,
+) -> object:
+    from twopoint_project.vision.capture import CameraCapture
+
+    return CameraCapture(
+        camera_index=camera_index,
+        width=width,
+        height=height,
+        fps=fps,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,8 +109,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> bool:
-    from twopoint_project.vision.capture import CameraCapture
-
     inferencer = build_vision_inferencer(
         backend=args.vision_backend,
         onnx_path=args.onnx,
@@ -110,7 +126,7 @@ def run(args: argparse.Namespace) -> bool:
     deadline = time.monotonic() + args.timeout
     settled_frames = 0
 
-    with CameraCapture(
+    with open_camera_capture(
         camera_index=args.camera,
         width=args.camera_width,
         height=args.camera_height,
@@ -126,7 +142,10 @@ def run(args: argparse.Namespace) -> bool:
         command_interval=args.command_interval,
         enable_settle_delay=args.enable_settle_delay,
         debug_frames=args.debug_frames,
-    ) as gimbal:
+    ) as gimbal, VisionProducer(
+        capture=capture,
+        inferencer=inferencer,
+    ) as vision:
         print(f"question2: backend={args.vision_backend}")
         print(f"question2: providers={inferencer.providers}")
         print(f"question2: target-only mode, timeout={args.timeout:.2f}s")
@@ -134,8 +153,14 @@ def run(args: argparse.Namespace) -> bool:
 
         while time.monotonic() < deadline:
             loop_started_at = time.monotonic()
-            captured = capture.read_frame()
-            points = inferencer.predict(captured.frame_bgr)
+            read_timeout = min(max(deadline - time.monotonic(), 0.0), 1.0)
+            try:
+                vision_frame = vision.read_latest(timeout=read_timeout)
+            except TimeoutError:
+                continue
+
+            captured = vision_frame.captured
+            points = vision_frame.points
             update = servo.update(gimbal, points, conf_threshold=args.conf_threshold)
 
             if update.settled:

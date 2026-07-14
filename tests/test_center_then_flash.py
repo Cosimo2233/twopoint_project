@@ -110,7 +110,7 @@ class CenterThenFlashTest(unittest.TestCase):
         fake_gimbal = FakeGimbal()
         fake_laser = FakeLaser()
 
-        with patch.object(center_then_flash, "CameraCapture", FakeCapture), patch.object(
+        with patch.object(center_then_flash, "open_camera_capture", return_value=FakeCapture()), patch.object(
             center_then_flash,
             "open_serial_gimbal",
             return_value=fake_gimbal,

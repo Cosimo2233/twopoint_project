@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 import sys
+from typing import Any
 
 
 if __package__ in {None, ""}:
@@ -21,6 +22,7 @@ from twopoint_project.contrl.center_then_flash import (
     env_int,
     env_str,
     load_dotenv,
+    open_camera_capture,
 )
 from twopoint_project.contrl.target_center_servo import AimUpdate, PointPrediction, TargetCenterServo
 from twopoint_project.f32c.gimbal import (
@@ -34,13 +36,13 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_Y_ID,
     open_serial_gimbal,
 )
-from twopoint_project.vision.capture import CapturedFrame, CameraCapture
 from twopoint_project.vision.inferencer import (
     DEFAULT_IMG_SIZE,
     DEFAULT_ONNX_PATH,
     DEFAULT_VISION_BACKEND,
     build_vision_inferencer,
 )
+from twopoint_project.vision.pipeline import VisionProducer
 
 
 DEFAULT_OUTPUT_DIR = Path("outputs")
@@ -70,7 +72,7 @@ class AimVideoRecorder:
         self.writer: cv2.VideoWriter | None = None
         self.frame_count = 0
 
-    def write(self, captured: CapturedFrame, points: list[PointPrediction], update: AimUpdate) -> None:
+    def write(self, captured: Any, points: list[PointPrediction], update: AimUpdate) -> None:
         annotated = draw_aim_frame(captured.frame_bgr, points, update, self.conf_threshold)
         if self.writer is None:
             height, width = annotated.shape[:2]
@@ -242,12 +244,15 @@ def run(args: argparse.Namespace) -> bool:
         )
     )
 
-    with CameraCapture(
+    with open_camera_capture(
         camera_index=args.camera,
         width=args.camera_width,
         height=args.camera_height,
         fps=args.camera_fps,
-    ) as capture, gimbal_context as gimbal:
+    ) as capture, gimbal_context as gimbal, VisionProducer(
+        capture=capture,
+        inferencer=inferencer,
+    ) as vision:
         print(f"draw: backend={args.vision_backend}")
         print(f"draw: providers={inferencer.providers}")
         print(f"draw: dry_run={args.dry_run}")
@@ -255,9 +260,8 @@ def run(args: argparse.Namespace) -> bool:
             gimbal.initialize()
         try:
             return center_target(
-                capture=capture,
+                vision=vision,
                 gimbal=gimbal,
-                inferencer=inferencer,
                 servo=servo,
                 conf_threshold=args.conf_threshold,
                 loop_hz=args.loop_hz,

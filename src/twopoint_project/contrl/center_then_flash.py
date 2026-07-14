@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 
 try:
     from dotenv import load_dotenv
@@ -36,18 +36,16 @@ from twopoint_project.f32c.gimbal import (
     open_serial_gimbal,
 )
 from twopoint_project.flash import open_laser_pointer
-from twopoint_project.vision.capture import CameraCapture
-from twopoint_project.vision.capture import CapturedFrame
 from twopoint_project.vision.inferencer import (
     DEFAULT_IMG_SIZE,
     DEFAULT_ONNX_PATH,
     DEFAULT_VISION_BACKEND,
-    VisionInferencer,
     build_vision_inferencer,
 )
+from twopoint_project.vision.pipeline import VisionProducer
 
 
-CenterFrameCallback = Callable[[CapturedFrame, list[PointPrediction], AimUpdate], None]
+CenterFrameCallback = Callable[[Any, list[PointPrediction], AimUpdate], None]
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -70,6 +68,23 @@ def env_int(name: str, default: int) -> int:
 def env_str(name: str, default: str) -> str:
     value = os.getenv(name)
     return default if value is None or value == "" else value
+
+
+def open_camera_capture(
+    *,
+    camera_index: int,
+    width: int | None,
+    height: int | None,
+    fps: int | None,
+) -> object:
+    from twopoint_project.vision.capture import CameraCapture
+
+    return CameraCapture(
+        camera_index=camera_index,
+        width=width,
+        height=height,
+        fps=fps,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,9 +138,8 @@ def parse_args() -> argparse.Namespace:
 
 def center_target(
     *,
-    capture: CameraCapture,
+    vision: VisionProducer,
     gimbal: object,
-    inferencer: VisionInferencer,
     servo: TargetCenterServo,
     conf_threshold: float,
     loop_hz: float,
@@ -138,8 +152,14 @@ def center_target(
 
     while time.monotonic() < deadline:
         loop_started_at = time.monotonic()
-        captured = capture.read_frame()
-        points = inferencer.predict(captured.frame_bgr)
+        read_timeout = min(max(deadline - time.monotonic(), 0.0), 1.0)
+        try:
+            vision_frame = vision.read_latest(timeout=read_timeout)
+        except TimeoutError:
+            continue
+
+        captured = vision_frame.captured
+        points = vision_frame.points
         update = servo.update(gimbal, points, conf_threshold=conf_threshold)
         if on_frame is not None:
             on_frame(captured, points, update)
@@ -196,7 +216,7 @@ def run(args: argparse.Namespace) -> bool:
         deadband=args.deadband,
     )
 
-    with CameraCapture(
+    with open_camera_capture(
         camera_index=args.camera,
         width=args.camera_width,
         height=args.camera_height,
@@ -212,7 +232,10 @@ def run(args: argparse.Namespace) -> bool:
         command_interval=args.command_interval,
         enable_settle_delay=args.enable_settle_delay,
         debug_frames=args.debug_frames,
-    ) as gimbal, open_laser_pointer(initial_on=False) as laser:
+    ) as gimbal, VisionProducer(
+        capture=capture,
+        inferencer=inferencer,
+    ) as vision, open_laser_pointer(initial_on=False) as laser:
         print("task: center_then_flash")
         print(f"task: backend={args.vision_backend}")
         print(f"task: providers={inferencer.providers}")
@@ -224,9 +247,8 @@ def run(args: argparse.Namespace) -> bool:
 
         try:
             centered = center_target(
-                capture=capture,
+                vision=vision,
                 gimbal=gimbal,
-                inferencer=inferencer,
                 servo=servo,
                 conf_threshold=args.conf_threshold,
                 loop_hz=args.loop_hz,
