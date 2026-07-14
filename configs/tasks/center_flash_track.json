@@ -25,30 +25,34 @@
       "x": {
         "kp": -12.0,
         "ki": 0.0,
-        "kd": 0.1,
+        "kd": 2.0,
         "integral_limit": 0.2,
-        "output_limit_deg": 5.0
+        "output_limit_deg": 90.0
       },
       "y": {
         "kp": 12.0,
         "ki": 0.0,
-        "kd": 0.1,
+        "kd": 2.0,
         "integral_limit": 0.2,
-        "output_limit_deg": 5.0
+        "output_limit_deg": 90.0
       }
     },
     "deadband": 0.006,
     "loop_hz": 15.0,
     "stale_target_seconds": 0.3,
-    "stale_target_step_scale": 0.5,
+    "stale_target_step_scale": 0.0,
     "timeout": 100.0,
     "stable_frames": 3
   },
   "laser": {
-    "hold_seconds": 5.0
+    "hold_seconds": 5.0,
+    "on_during_run": true
   },
   "behavior": {
     "fire_after_timeout": true,
     "exit_after_fire": false
+  },
+  "recording": {
+    "save_raw_video": true
   }
 }

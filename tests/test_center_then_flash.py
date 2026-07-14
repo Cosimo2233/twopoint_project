@@ -15,6 +15,7 @@ from twopoint_project.config import (
     CenterThenFlashConfig,
     F32CConfig,
     LaserConfig,
+    RecordingConfig,
     RuntimeConfig,
     VisionConfig,
     WebRtcConfig,
@@ -95,6 +96,23 @@ class FakeVisionFrames:
         return self.frames.pop(0)
 
 
+class FakeVideoRecorder:
+    instances: list[FakeVideoRecorder] = []
+
+    def __init__(self, output_path: Path, fps: float, label: str) -> None:
+        self.output_path = output_path
+        self.fps = fps
+        self.label = label
+        self.frames: list[object] = []
+        FakeVideoRecorder.instances.append(self)
+
+    def write(self, frame_bgr: object) -> None:
+        self.frames.append(frame_bgr)
+
+    def close(self) -> None:
+        pass
+
+
 def make_task_config() -> CenterThenFlashConfig:
     return CenterThenFlashConfig(
         mode="center_then_flash",
@@ -124,6 +142,7 @@ def make_task_config() -> CenterThenFlashConfig:
         ),
         laser=LaserConfig(hold_seconds=0),
         behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=True),
+        recording=RecordingConfig(),
     )
 
 
@@ -168,6 +187,20 @@ def make_track_config() -> CenterFlashTrackConfig:
         ),
         laser=LaserConfig(hold_seconds=0),
         behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=False),
+        recording=RecordingConfig(),
+    )
+
+
+def make_constant_laser_track_config() -> CenterFlashTrackConfig:
+    task_config = make_track_config()
+    return CenterFlashTrackConfig(
+        mode=task_config.mode,
+        camera=task_config.camera,
+        f32c=task_config.f32c,
+        center=task_config.center,
+        laser=LaserConfig(hold_seconds=0, on_during_run=True),
+        behavior=task_config.behavior,
+        recording=task_config.recording,
     )
 
 
@@ -241,6 +274,70 @@ class CenterThenFlashTest(unittest.TestCase):
         self.assertTrue(fake_gimbal.disabled)
         self.assertIn("on", fake_laser.events)
         self.assertEqual(fake_laser.events[-1], "off")
+
+    def test_track_mode_can_keep_laser_on_until_stop_requested(self) -> None:
+        fake_gimbal = FakeGimbal()
+        fake_laser = FakeLaser()
+        stop_requested = StopAfterCalls(3)
+
+        with patch.object(center_then_flash, "open_camera_capture", return_value=FakeCapture()), patch.object(
+            center_then_flash,
+            "open_serial_gimbal",
+            return_value=fake_gimbal,
+        ), patch.object(
+            center_then_flash,
+            "open_laser_pointer",
+            return_value=fake_laser,
+        ), patch.object(
+            center_then_flash,
+            "build_vision_inferencer",
+            return_value=FakeInferencer(),
+        ):
+            result = center_then_flash.run_track(
+                make_constant_laser_track_config(),
+                make_runtime_config(),
+                stop_requested,
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(fake_laser.events.count("on"), 1)
+        self.assertEqual(fake_laser.events[-1], "off")
+        self.assertTrue(fake_gimbal.disabled)
+
+    def test_monitor_writes_raw_video_when_enabled(self) -> None:
+        FakeVideoRecorder.instances = []
+        captured = SimpleNamespace(
+            frame_id=1,
+            timestamp=0.0,
+            frame_bgr=np.zeros((8, 12, 3), dtype=np.uint8),
+        )
+        update = SimpleNamespace(
+            valid=True,
+            moved=False,
+            settled=True,
+            reason="settled",
+            target=None,
+            step=None,
+        )
+
+        with patch.object(center_then_flash, "VideoRecorder", FakeVideoRecorder):
+            monitor = center_then_flash.CenterRunMonitor(
+                enabled=True,
+                output_path=Path("outputs/center_flash_track_20260714_120000.mp4"),
+                fps=15.0,
+                save_raw_video=True,
+                webrtc_host="127.0.0.1",
+                webrtc_port=8080,
+                backend="traditional",
+                providers=["fake"],
+                conf_threshold=0.5,
+            )
+            monitor.on_frame(captured, [], update)
+
+        self.assertEqual([recorder.label for recorder in FakeVideoRecorder.instances], ["annotated", "raw"])
+        self.assertEqual(FakeVideoRecorder.instances[1].output_path.name, "center_flash_track_20260714_120000_raw.mp4")
+        self.assertEqual(len(FakeVideoRecorder.instances[0].frames), 1)
+        self.assertEqual(len(FakeVideoRecorder.instances[1].frames), 1)
 
     def test_track_target_reuses_last_valid_frame_when_no_new_frame_is_available(self) -> None:
         fake_gimbal = FakeGimbal()

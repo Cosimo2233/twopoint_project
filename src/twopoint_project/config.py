@@ -202,13 +202,17 @@ class CenterConfig:
 @dataclass(frozen=True)
 class LaserConfig:
     hold_seconds: float = 5.0
+    on_during_run: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LaserConfig:
         hold_seconds = float(data.get("hold_seconds", cls.hold_seconds))
         if hold_seconds < 0:
             raise ValueError("laser.hold_seconds must be non-negative")
-        return cls(hold_seconds=hold_seconds)
+        return cls(
+            hold_seconds=hold_seconds,
+            on_during_run=bool(data.get("on_during_run", cls.on_during_run)),
+        )
 
 
 @dataclass(frozen=True)
@@ -225,6 +229,15 @@ class BehaviorConfig:
 
 
 @dataclass(frozen=True)
+class RecordingConfig:
+    save_raw_video: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RecordingConfig:
+        return cls(save_raw_video=bool(data.get("save_raw_video", cls.save_raw_video)))
+
+
+@dataclass(frozen=True)
 class UnsupportedTaskConfig:
     mode: str
     raw: dict[str, Any]
@@ -238,6 +251,7 @@ class CenterThenFlashConfig:
     center: CenterConfig
     laser: LaserConfig
     behavior: BehaviorConfig
+    recording: RecordingConfig
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterThenFlashConfig:
@@ -251,6 +265,7 @@ class CenterThenFlashConfig:
             center=CenterConfig.from_dict(section(data, "center")),
             laser=LaserConfig.from_dict(section(data, "laser")),
             behavior=BehaviorConfig.from_dict(section(data, "behavior")),
+            recording=RecordingConfig.from_dict(section(data, "recording")),
         )
 
 
@@ -262,6 +277,7 @@ class CenterFlashTrackConfig:
     center: CenterConfig
     laser: LaserConfig
     behavior: BehaviorConfig
+    recording: RecordingConfig
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterFlashTrackConfig:
@@ -275,6 +291,7 @@ class CenterFlashTrackConfig:
             center=CenterConfig.from_dict(section(data, "center")),
             laser=LaserConfig.from_dict(section(data, "laser")),
             behavior=BehaviorConfig.from_dict(section(data, "behavior")),
+            recording=RecordingConfig.from_dict(section(data, "recording")),
         )
 
 

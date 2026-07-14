@@ -213,6 +213,10 @@ def default_monitor_output_path(mode: str = "center_then_flash") -> Path:
     return DEFAULT_MONITOR_OUTPUT_DIR / f"{mode}_{stamp}.mp4"
 
 
+def raw_monitor_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}_raw{output_path.suffix}")
+
+
 def normalized_to_pixel(point: PointPrediction, width: int, height: int) -> tuple[int, int]:
     x = int(round(point["x"] * max(width - 1, 1)))
     y = int(round(point["y"] * max(height - 1, 1)))
@@ -308,10 +312,11 @@ def local_urls(host: str, port: int) -> list[str]:
     return [f"http://{address}:{port}/" for address in sorted(hosts)]
 
 
-class AnnotatedVideoRecorder:
-    def __init__(self, output_path: Path, fps: float) -> None:
+class VideoRecorder:
+    def __init__(self, output_path: Path, fps: float, label: str) -> None:
         self.output_path = output_path
         self.fps = fps
+        self.label = label
         self.writer: cv2.VideoWriter | None = None
         self.frame_count = 0
 
@@ -323,7 +328,7 @@ class AnnotatedVideoRecorder:
             self.writer = cv2.VideoWriter(str(self.output_path), fourcc, self.fps, (width, height))
             if not self.writer.isOpened():
                 raise RuntimeError(f"Failed to open video writer: {self.output_path}")
-            print(f"monitor: recording annotated video to {self.output_path}")
+            print(f"monitor: recording {self.label} video to {self.output_path}")
 
         self.writer.write(frame_bgr)
         self.frame_count += 1
@@ -527,6 +532,7 @@ class CenterRunMonitor:
         enabled: bool,
         output_path: Path,
         fps: float,
+        save_raw_video: bool,
         webrtc_host: str,
         webrtc_port: int,
         backend: str,
@@ -535,7 +541,9 @@ class CenterRunMonitor:
     ) -> None:
         self.enabled = enabled
         self.output_path = output_path
+        self.raw_output_path = raw_monitor_output_path(output_path)
         self.fps = fps
+        self.save_raw_video = save_raw_video
         self.webrtc_host = webrtc_host
         self.webrtc_port = webrtc_port
         self.backend = backend
@@ -543,7 +551,8 @@ class CenterRunMonitor:
         self.conf_threshold = conf_threshold
         self.frame_buffer = LatestAnnotatedFrame()
         self.stop_event = threading.Event()
-        self.recorder = AnnotatedVideoRecorder(output_path, fps)
+        self.recorder = VideoRecorder(output_path, fps, "annotated")
+        self.raw_recorder = VideoRecorder(self.raw_output_path, fps, "raw") if save_raw_video else None
         self.server = CenterWebRtcServer(
             host=webrtc_host,
             port=webrtc_port,
@@ -561,6 +570,9 @@ class CenterRunMonitor:
             self.server.stop()
             self.recorder.close()
             print(f"monitor: saved {self.recorder.frame_count} frame(s) to {self.output_path}")
+            if self.raw_recorder is not None:
+                self.raw_recorder.close()
+                print(f"monitor: saved {self.raw_recorder.frame_count} raw frame(s) to {self.raw_output_path}")
 
     def on_frame(self, captured: Any, points: list[PointPrediction], update: AimUpdate) -> None:
         if not self.enabled:
@@ -584,6 +596,8 @@ class CenterRunMonitor:
             "step": dataclass_to_dict(update.step),
         }
         self.recorder.write(annotated)
+        if self.raw_recorder is not None:
+            self.raw_recorder.write(captured.frame_bgr)
         self.frame_buffer.publish(annotated, status)
 
     def stop_requested(self) -> bool:
@@ -820,6 +834,7 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
             enabled=runtime_config.webrtc.enabled,
             output_path=monitor_output_path,
             fps=task_config.center.loop_hz,
+            save_raw_video=task_config.recording.save_raw_video,
             webrtc_host=runtime_config.webrtc.host,
             webrtc_port=runtime_config.webrtc.port,
             backend=runtime_config.vision.backend,
@@ -910,6 +925,7 @@ def run_track(
             enabled=runtime_config.webrtc.enabled,
             output_path=monitor_output_path,
             fps=task_config.center.loop_hz,
+            save_raw_video=task_config.recording.save_raw_video,
             webrtc_host=runtime_config.webrtc.host,
             webrtc_port=runtime_config.webrtc.port,
             backend=runtime_config.vision.backend,
@@ -920,13 +936,20 @@ def run_track(
             print(f"task: backend={runtime_config.vision.backend}")
             print(f"task: providers={inferencer.providers}")
             print(f"task: center_timeout={task_config.center.timeout:.2f}s")
-            print(f"task: laser_hold_seconds={task_config.laser.hold_seconds:.2f}s")
+            if task_config.laser.on_during_run:
+                print("task: laser_on_during_run=true")
+            else:
+                print(f"task: laser_hold_seconds={task_config.laser.hold_seconds:.2f}s")
             print(f"monitor: record_webrtc={runtime_config.webrtc.enabled}")
 
             laser.off()
             gimbal.initialize()
 
             try:
+                if task_config.laser.on_during_run:
+                    print("laser: on")
+                    laser.on()
+
                 centered = center_target(
                     vision=vision,
                     gimbal=gimbal,
@@ -949,7 +972,9 @@ def run_track(
                     def should_stop() -> bool:
                         return monitor.stop_requested() or external_stop_requested()
 
-                    if centered or task_config.behavior.fire_after_timeout:
+                    if task_config.laser.on_during_run:
+                        print("laser: keeping on during tracking")
+                    elif centered or task_config.behavior.fire_after_timeout:
                         print("laser: on")
                         laser.on()
                         stopped_during_fire = sleep_with_stop(task_config.laser.hold_seconds, should_stop)
@@ -975,7 +1000,9 @@ def run_track(
                     def should_stop() -> bool:
                         return monitor.stop_requested() or stopper.should_stop()
 
-                    if centered or task_config.behavior.fire_after_timeout:
+                    if task_config.laser.on_during_run:
+                        print("laser: keeping on during tracking")
+                    elif centered or task_config.behavior.fire_after_timeout:
                         print("laser: on")
                         laser.on()
                         stopped_during_fire = sleep_with_stop(task_config.laser.hold_seconds, should_stop)
