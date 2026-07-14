@@ -10,6 +10,10 @@ class F32CProtocolTest(unittest.TestCase):
         self.assertEqual(protocol.build_enable(1), bytes.fromhex("7A 01 06 7D 7B"))
         self.assertEqual(protocol.build_enable(2), bytes.fromhex("7A 02 06 7E 7B"))
 
+    def test_disable_frames_match_manual(self) -> None:
+        self.assertEqual(protocol.build_disable(1), bytes.fromhex("7A 01 05 7E 7B"))
+        self.assertEqual(protocol.build_disable(2), bytes.fromhex("7A 02 05 7D 7B"))
+
     def test_multi_turn_passthrough_frames_match_manual(self) -> None:
         self.assertEqual(protocol.build_set_multi_turn_passthrough(1), bytes.fromhex("7A 01 00 00 03 78 7B"))
         self.assertEqual(protocol.build_set_multi_turn_passthrough(2), bytes.fromhex("7A 02 00 00 03 7B 7B"))

@@ -4,6 +4,7 @@ import unittest
 
 from twopoint_project.contrl.target_center_servo import (
     DEFAULT_CONTROL_CONF_THRESHOLD,
+    PIDAxisGains,
     TargetCenterObservation,
     TargetCenterServo,
     control_conf_threshold,
@@ -108,6 +109,23 @@ class TargetCenterServoTest(unittest.TestCase):
         self.assertEqual(len(gimbal.moves), 1)
         self.assertAlmostEqual(gimbal.moves[0][0], 1.0)
         self.assertAlmostEqual(gimbal.moves[0][1], 0.5)
+
+    def test_pid_integral_contributes_to_repeated_steps(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(kp=0.0, ki=10.0, kd=0.0, integral_limit=1.0, output_limit_deg=10.0),
+            y_pid=PIDAxisGains(kp=0.0, ki=0.0, kd=0.0, output_limit_deg=10.0),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+
+        first = servo.compute_step(TargetCenterObservation(x=0.6, y=0.5, confidence=1.0), now=1.0)
+        second = servo.compute_step(TargetCenterObservation(x=0.6, y=0.5, confidence=1.0), now=1.5)
+
+        self.assertAlmostEqual(first.x_delta_deg, 0.0)
+        self.assertAlmostEqual(second.x_delta_deg, 0.5)
+        self.assertIsNotNone(second.x_output)
+        assert second.x_output is not None
+        self.assertAlmostEqual(second.x_output.i, 0.5)
 
 
 if __name__ == "__main__":

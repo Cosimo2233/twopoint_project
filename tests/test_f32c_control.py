@@ -69,6 +69,20 @@ class F32CGimbalTest(unittest.TestCase):
         self.assertEqual(serial_port.writes[0], protocol.build_multi_turn_angle(1, 1.0))
         self.assertEqual(serial_port.writes[1], protocol.build_multi_turn_angle(2, -0.5))
 
+    def test_disable_sends_both_axes_without_initializing(self) -> None:
+        serial_port = FakeSerial()
+        gimbal = F32CGimbal(serial_port, startup_delay=0, command_interval=0)
+
+        gimbal.disable()
+
+        self.assertEqual(
+            serial_port.writes,
+            [
+                protocol.build_disable(1),
+                protocol.build_disable(2),
+            ],
+        )
+
 
 class F32CCliTest(unittest.TestCase):
     def test_module_no_longer_exposes_standalone_parser(self) -> None:

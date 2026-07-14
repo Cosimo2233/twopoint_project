@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from twopoint_project.contrl.target_center_servo import validate_conf_threshold
+from twopoint_project.contrl.target_center_servo import PIDAxisGains, validate_conf_threshold
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
@@ -113,6 +113,36 @@ class F32CConfig:
 
 
 @dataclass(frozen=True)
+class PIDConfig:
+    x: PIDAxisGains
+    y: PIDAxisGains
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        x_gain_deg: float,
+        y_gain_deg: float,
+        max_step_deg: float,
+    ) -> PIDConfig:
+        return cls(
+            x=pid_axis_from_dict(section(data, "x"), kp=x_gain_deg, output_limit_deg=max_step_deg),
+            y=pid_axis_from_dict(section(data, "y"), kp=y_gain_deg, output_limit_deg=max_step_deg),
+        )
+
+
+def pid_axis_from_dict(data: dict[str, Any], *, kp: float, output_limit_deg: float) -> PIDAxisGains:
+    return PIDAxisGains(
+        kp=float(data.get("kp", kp)),
+        ki=float(data.get("ki", 0.0)),
+        kd=float(data.get("kd", 0.0)),
+        integral_limit=float(data.get("integral_limit", 0.0)),
+        output_limit_deg=float(data.get("output_limit_deg", output_limit_deg)),
+    )
+
+
+@dataclass(frozen=True)
 class CenterConfig:
     conf_threshold: float = 0.5
     target_x: float = 0.5
@@ -124,6 +154,7 @@ class CenterConfig:
     loop_hz: float = 15.0
     timeout: float = 100.0
     stable_frames: int = 3
+    pid: PIDConfig | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterConfig:
@@ -134,17 +165,27 @@ class CenterConfig:
         timeout = float(data.get("timeout", cls.timeout))
         if timeout < 0:
             raise ValueError("center.timeout must be non-negative")
+        x_gain_deg = float(data.get("x_gain_deg", cls.x_gain_deg))
+        y_gain_deg = float(data.get("y_gain_deg", cls.y_gain_deg))
+        max_step_deg = float(data.get("max_step_deg", cls.max_step_deg))
+        pid_data = section(data, "pid") if "pid" in data else {}
         return cls(
             conf_threshold=conf_threshold,
             target_x=float(data.get("target_x", cls.target_x)),
             target_y=float(data.get("target_y", cls.target_y)),
-            x_gain_deg=float(data.get("x_gain_deg", cls.x_gain_deg)),
-            y_gain_deg=float(data.get("y_gain_deg", cls.y_gain_deg)),
-            max_step_deg=float(data.get("max_step_deg", cls.max_step_deg)),
+            x_gain_deg=x_gain_deg,
+            y_gain_deg=y_gain_deg,
+            max_step_deg=max_step_deg,
             deadband=float(data.get("deadband", cls.deadband)),
             loop_hz=float(data.get("loop_hz", cls.loop_hz)),
             timeout=timeout,
             stable_frames=stable_frames,
+            pid=PIDConfig.from_dict(
+                pid_data,
+                x_gain_deg=x_gain_deg,
+                y_gain_deg=y_gain_deg,
+                max_step_deg=max_step_deg,
+            ),
         )
 
 

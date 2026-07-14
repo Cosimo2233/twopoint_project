@@ -52,6 +52,64 @@ class GimbalStep:
     y_delta_deg: float
     error: CenteringError
     settled: bool
+    x_output: PIDOutput | None = None
+    y_output: PIDOutput | None = None
+
+
+@dataclass(frozen=True)
+class PIDAxisGains:
+    kp: float
+    ki: float = 0.0
+    kd: float = 0.0
+    integral_limit: float = 0.0
+    output_limit_deg: float = 1.0
+
+
+@dataclass(frozen=True)
+class PIDOutput:
+    p: float
+    i: float
+    d: float
+    raw: float
+    clamped: float
+
+
+@dataclass
+class PIDAxisState:
+    integral: float = 0.0
+    previous_error: float | None = None
+    previous_time: float | None = None
+
+    def reset(self) -> None:
+        self.integral = 0.0
+        self.previous_error = None
+        self.previous_time = None
+
+    def update(self, error: float, gains: PIDAxisGains, now: float) -> PIDOutput:
+        dt = 0.0 if self.previous_time is None else max(now - self.previous_time, 0.0)
+        if gains.integral_limit > 0 and dt > 0:
+            self.integral = clamp(
+                self.integral + error * dt,
+                -abs(gains.integral_limit),
+                abs(gains.integral_limit),
+            )
+        elif gains.integral_limit <= 0:
+            self.integral = 0.0
+
+        derivative = 0.0
+        if self.previous_error is not None and dt > 0:
+            derivative = (error - self.previous_error) / dt
+
+        p = gains.kp * error
+        i = gains.ki * self.integral
+        d = gains.kd * derivative
+        raw = p + i + d
+        output_limit = abs(gains.output_limit_deg)
+        clamped = clamp(raw, -output_limit, output_limit) if output_limit > 0 else raw
+
+        self.previous_error = error
+        self.previous_time = now
+        return PIDOutput(p=p, i=i, d=d, raw=raw, clamped=clamped)
 
 
 @dataclass(frozen=True)
@@ -101,14 +159,17 @@ class TargetCenterServo:
         max_step_deg: float = 1.0,
         deadband: float = 0.006,
         conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
+        x_pid: PIDAxisGains | None = None,
+        y_pid: PIDAxisGains | None = None,
     ) -> None:
         self.center_x = center_x
         self.center_y = center_y
-        self.x_gain_deg = x_gain_deg
-        self.y_gain_deg = y_gain_deg
-        self.max_step_deg = abs(max_step_deg)
         self.deadband = abs(deadband)
         self.conf_threshold = validate_conf_threshold(conf_threshold)
+        self.x_pid = x_pid or PIDAxisGains(kp=x_gain_deg, output_limit_deg=max_step_deg)
+        self.y_pid = y_pid or PIDAxisGains(kp=y_gain_deg, output_limit_deg=max_step_deg)
+        self._x_state = PIDAxisState()
+        self._y_state = PIDAxisState()
 
     def compute_error(self, target: TargetCenterObservation) -> CenteringError:
         x_error = target.x - self.center_x
@@ -119,20 +180,48 @@ class TargetCenterServo:
             distance=hypot(x_error, y_error),
         )
 
-    def compute_step(self, target: TargetCenterObservation) -> GimbalStep:
+    def compute_step(self, target: TargetCenterObservation, *, now: float | None = None) -> GimbalStep:
         error = self.compute_error(target)
         x_settled = abs(error.x) <= self.deadband
         y_settled = abs(error.y) <= self.deadband
         settled = x_settled and y_settled
 
-        x_delta = 0.0 if x_settled else self.x_gain_deg * error.x
-        y_delta = 0.0 if y_settled else self.y_gain_deg * error.y
+        if settled:
+            self._x_state.reset()
+            self._y_state.reset()
+            return GimbalStep(
+                x_delta_deg=0.0,
+                y_delta_deg=0.0,
+                error=error,
+                settled=True,
+                x_output=None,
+                y_output=None,
+            )
+
+        now = time.monotonic() if now is None else now
+        if x_settled:
+            self._x_state.reset()
+            x_output = None
+            x_delta = 0.0
+        else:
+            x_output = self._x_state.update(error.x, self.x_pid, now)
+            x_delta = x_output.clamped
+
+        if y_settled:
+            self._y_state.reset()
+            y_output = None
+            y_delta = 0.0
+        else:
+            y_output = self._y_state.update(error.y, self.y_pid, now)
+            y_delta = y_output.clamped
 
         return GimbalStep(
-            x_delta_deg=clamp(x_delta, -self.max_step_deg, self.max_step_deg),
-            y_delta_deg=clamp(y_delta, -self.max_step_deg, self.max_step_deg),
+            x_delta_deg=x_delta,
+            y_delta_deg=y_delta,
             error=error,
             settled=settled,
+            x_output=x_output,
+            y_output=y_output,
         )
 
     def update(

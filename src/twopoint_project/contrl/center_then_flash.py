@@ -243,18 +243,22 @@ def draw_aim_frame(
         "target_center": (0, 220, 0),
         "laser_point": (0, 0, 255),
     }
+    confidence_lines: list[tuple[str, tuple[int, int, int]]] = []
     for point in points:
         label = str(point["label"])
         color = colors.get(label, (0, 200, 255))
         x, y = normalized_to_pixel(point, width, height)
         valid = point["confidence"] >= conf_threshold
+        confidence_lines.append((f"{label}: conf={point['confidence']:.2f}", color))
         radius = 7 if valid else 4
         thickness = -1 if valid else 1
         cv2.circle(image, (x, y), radius, color, thickness, cv2.LINE_AA)
         cv2.circle(image, (x, y), radius + 3, (255, 255, 255), 1, cv2.LINE_AA)
-        draw_text(image, f"{label} conf={point['confidence']:.2f}", (x + 10, max(y - 8, 18)), color)
         if label == "target_center" and valid:
             cv2.arrowedLine(image, center, (x, y), color, 2, cv2.LINE_AA, tipLength=0.12)
+
+    for index, (text, color) in enumerate(confidence_lines):
+        draw_text(image, text, (14, 54 + index * 22), color)
 
     if update.step is not None:
         draw_text(
@@ -744,6 +748,8 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
         max_step_deg=task_config.center.max_step_deg,
         deadband=task_config.center.deadband,
         conf_threshold=task_config.center.conf_threshold,
+        x_pid=task_config.center.pid.x if task_config.center.pid is not None else None,
+        y_pid=task_config.center.pid.y if task_config.center.pid is not None else None,
     )
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
@@ -830,6 +836,8 @@ def run_track(
         max_step_deg=task_config.center.max_step_deg,
         deadband=task_config.center.deadband,
         conf_threshold=task_config.center.conf_threshold,
+        x_pid=task_config.center.pid.x if task_config.center.pid is not None else None,
+        y_pid=task_config.center.pid.y if task_config.center.pid is not None else None,
     )
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
