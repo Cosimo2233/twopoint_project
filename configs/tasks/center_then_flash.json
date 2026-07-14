@@ -1,0 +1,39 @@
+{
+  "mode": "center_then_flash",
+  "camera": {
+    "index": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 30
+  },
+  "f32c": {
+    "port": "/dev/ttyAS4",
+    "baudrate": 115200,
+    "x_id": 1,
+    "y_id": 2,
+    "speed_rpm": 100,
+    "startup_delay": 0.3,
+    "command_interval": 0.001,
+    "enable_settle_delay": 0.2,
+    "debug_frames": false
+  },
+  "center": {
+    "conf_threshold": 0.5,
+    "target_x": 0.5,
+    "target_y": 0.5,
+    "x_gain_deg": -8.0,
+    "y_gain_deg": 8.0,
+    "max_step_deg": 1.0,
+    "deadband": 0.006,
+    "loop_hz": 15.0,
+    "timeout": 100.0,
+    "stable_frames": 3
+  },
+  "laser": {
+    "hold_seconds": 5.0
+  },
+  "behavior": {
+    "fire_after_timeout": true,
+    "exit_after_fire": true
+  }
+}

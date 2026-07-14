@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import hypot
-import os
 import time
 from typing import Protocol, Sequence, TypedDict
 
 
 TARGET_CENTER_LABEL = "target_center"
-CONTROL_CONF_THRESHOLD_ENV = "CENTER_CONF_THRESHOLD"
 DEFAULT_CONTROL_CONF_THRESHOLD = 0.5
 
 
@@ -19,10 +17,7 @@ def validate_conf_threshold(conf_threshold: float) -> float:
 
 
 def control_conf_threshold() -> float:
-    value = os.getenv(CONTROL_CONF_THRESHOLD_ENV)
-    if value is None or value == "":
-        return DEFAULT_CONTROL_CONF_THRESHOLD
-    return validate_conf_threshold(float(value))
+    return DEFAULT_CONTROL_CONF_THRESHOLD
 
 
 class PointPrediction(TypedDict):
@@ -71,8 +66,10 @@ class AimUpdate:
 
 def select_target_center(
     points: Sequence[PointPrediction],
+    *,
+    conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
 ) -> TargetCenterObservation | None:
-    conf_threshold = control_conf_threshold()
+    conf_threshold = validate_conf_threshold(conf_threshold)
     candidates = [
         point
         for point in points
@@ -103,6 +100,7 @@ class TargetCenterServo:
         y_gain_deg: float = -8.0,
         max_step_deg: float = 1.0,
         deadband: float = 0.006,
+        conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
     ) -> None:
         self.center_x = center_x
         self.center_y = center_y
@@ -110,6 +108,7 @@ class TargetCenterServo:
         self.y_gain_deg = y_gain_deg
         self.max_step_deg = abs(max_step_deg)
         self.deadband = abs(deadband)
+        self.conf_threshold = validate_conf_threshold(conf_threshold)
 
     def compute_error(self, target: TargetCenterObservation) -> CenteringError:
         x_error = target.x - self.center_x
@@ -141,7 +140,7 @@ class TargetCenterServo:
         gimbal: GimbalLike,
         points: Sequence[PointPrediction],
     ) -> AimUpdate:
-        target = select_target_center(points)
+        target = select_target_center(points, conf_threshold=self.conf_threshold)
         if target is None:
             return AimUpdate(
                 valid=False,

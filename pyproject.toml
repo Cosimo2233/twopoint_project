@@ -22,6 +22,8 @@ dependencies = [
     "aiortc (>=1.15.0,<2.0.0)",
 
     "aiohttp (>=3.14.1,<4.0.0)",
+
+    "typer (>=0.26.8,<0.27.0)",
 ]
 [[tool.poetry.source]]
 name = "tuna"

@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
-from argparse import ArgumentParser
 from dataclasses import asdict, is_dataclass
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
-import sys
 import threading
 import time
 from typing import Any, Callable
@@ -17,41 +13,16 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-
-    def load_dotenv() -> bool:
-        return False
-
-if __package__ in {None, ""}:
-    sys.path.append(str(Path(__file__).resolve().parents[2]))
-
+from twopoint_project.config import CenterThenFlashConfig, RuntimeConfig
 from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     PointPrediction,
     TargetCenterServo,
-    control_conf_threshold,
     sleep_for_loop_rate,
 )
-from twopoint_project.f32c.gimbal import (
-    DEFAULT_BAUDRATE,
-    DEFAULT_COMMAND_INTERVAL,
-    DEFAULT_ENABLE_SETTLE_DELAY,
-    DEFAULT_SERIAL_PORT,
-    DEFAULT_SPEED_RPM,
-    DEFAULT_STARTUP_DELAY,
-    DEFAULT_X_ID,
-    DEFAULT_Y_ID,
-    open_serial_gimbal,
-)
+from twopoint_project.f32c.gimbal import open_serial_gimbal
 from twopoint_project.flash import open_laser_pointer
-from twopoint_project.vision.inferencer import (
-    DEFAULT_IMG_SIZE,
-    DEFAULT_ONNX_PATH,
-    DEFAULT_VISION_BACKEND,
-    build_vision_inferencer,
-)
+from twopoint_project.vision.inferencer import build_vision_inferencer
 from twopoint_project.vision.pipeline import VisionProducer
 
 
@@ -210,28 +181,6 @@ WEBRTC_INDEX_HTML = """<!doctype html>
 """
 
 
-def env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None or value == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    return default if value is None or value == "" else float(value)
-
-
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return default if value is None or value == "" else int(value)
-
-
-def env_str(name: str, default: str) -> str:
-    value = os.getenv(name)
-    return default if value is None or value == "" else value
-
-
 def open_camera_capture(
     *,
     camera_index: int,
@@ -249,9 +198,9 @@ def open_camera_capture(
     )
 
 
-def default_monitor_output_path() -> Path:
+def default_monitor_output_path(mode: str = "center_then_flash") -> Path:
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    return DEFAULT_MONITOR_OUTPUT_DIR / f"center_then_flash_{stamp}.mp4"
+    return DEFAULT_MONITOR_OUTPUT_DIR / f"{mode}_{stamp}.mp4"
 
 
 def normalized_to_pixel(point: PointPrediction, width: int, height: int) -> tuple[int, int]:
@@ -269,11 +218,11 @@ def draw_aim_frame(
     frame_bgr: Any,
     points: list[PointPrediction],
     update: AimUpdate,
+    conf_threshold: float,
 ) -> Any:
     image = frame_bgr.copy()
     height, width = image.shape[:2]
     center = (width // 2, height // 2)
-    conf_threshold = control_conf_threshold()
 
     cv2.line(image, (center[0] - 18, center[1]), (center[0] + 18, center[1]), (255, 255, 255), 1, cv2.LINE_AA)
     cv2.line(image, (center[0], center[1] - 18), (center[0], center[1] + 18), (255, 255, 255), 1, cv2.LINE_AA)
@@ -557,6 +506,7 @@ class CenterRunMonitor:
         webrtc_port: int,
         backend: str,
         providers: list[str],
+        conf_threshold: float,
     ) -> None:
         self.enabled = enabled
         self.output_path = output_path
@@ -565,6 +515,7 @@ class CenterRunMonitor:
         self.webrtc_port = webrtc_port
         self.backend = backend
         self.providers = providers
+        self.conf_threshold = conf_threshold
         self.frame_buffer = LatestAnnotatedFrame()
         self.recorder = AnnotatedVideoRecorder(output_path, fps)
         self.server = CenterWebRtcServer(host=webrtc_host, port=webrtc_port, frame_buffer=self.frame_buffer)
@@ -584,7 +535,7 @@ class CenterRunMonitor:
         if not self.enabled:
             return
 
-        annotated = draw_aim_frame(captured.frame_bgr, points, update)
+        annotated = draw_aim_frame(captured.frame_bgr, points, update, self.conf_threshold)
         status = {
             "type": "vision_status",
             "task": "center_then_flash",
@@ -603,87 +554,6 @@ class CenterRunMonitor:
         }
         self.recorder.write(annotated)
         self.frame_buffer.publish(annotated, status)
-
-
-def parse_args() -> argparse.Namespace:
-    load_dotenv()
-    parser = ArgumentParser(
-        description=(
-            "Center the target paper in the camera view, then turn the laser on "
-            "for a fixed duration before safely shutting down."
-        )
-    )
-    parser.add_argument("--camera", type=int, default=env_int("TWOPOINT_CAMERA_INDEX", 0))
-    parser.add_argument("--camera-width", type=int, default=env_int("TWOPOINT_CAMERA_WIDTH", 640))
-    parser.add_argument("--camera-height", type=int, default=env_int("TWOPOINT_CAMERA_HEIGHT", 480))
-    parser.add_argument("--camera-fps", type=int, default=env_int("TWOPOINT_CAMERA_FPS", 30))
-    parser.add_argument("--vision-backend", default=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND))
-    parser.add_argument("--onnx", default=env_str("TWOPOINT_ONNX_PATH", DEFAULT_ONNX_PATH))
-    parser.add_argument("--img-size", type=int, default=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE))
-
-    parser.add_argument("--port", default=env_str("F32C_SERIAL_PORT", DEFAULT_SERIAL_PORT))
-    parser.add_argument("--baudrate", type=int, default=env_int("F32C_BAUDRATE", DEFAULT_BAUDRATE))
-    parser.add_argument("--x-id", type=int, default=env_int("F32C_X_ID", DEFAULT_X_ID))
-    parser.add_argument("--y-id", type=int, default=env_int("F32C_Y_ID", DEFAULT_Y_ID))
-    parser.add_argument("--speed-rpm", type=int, default=env_int("F32C_SPEED_RPM", DEFAULT_SPEED_RPM))
-    parser.add_argument("--startup-delay", type=float, default=env_float("F32C_STARTUP_DELAY", DEFAULT_STARTUP_DELAY))
-    parser.add_argument(
-        "--command-interval",
-        type=float,
-        default=env_float("F32C_COMMAND_INTERVAL", DEFAULT_COMMAND_INTERVAL),
-    )
-    parser.add_argument(
-        "--enable-settle-delay",
-        type=float,
-        default=env_float("F32C_ENABLE_SETTLE_DELAY", DEFAULT_ENABLE_SETTLE_DELAY),
-    )
-    parser.add_argument("--debug-frames", action="store_true")
-
-    parser.add_argument("--center-x", type=float, default=env_float("CENTER_TARGET_X", 0.5))
-    parser.add_argument("--center-y", type=float, default=env_float("CENTER_TARGET_Y", 0.5))
-    parser.add_argument("--x-gain-deg", type=float, default=env_float("CENTER_X_GAIN_DEG", -8.0))
-    parser.add_argument("--y-gain-deg", type=float, default=env_float("CENTER_Y_GAIN_DEG", 8.0))
-    parser.add_argument("--max-step-deg", type=float, default=env_float("CENTER_MAX_STEP_DEG", 1.0))
-    parser.add_argument("--deadband", type=float, default=env_float("CENTER_DEADBAND", 0.006))
-    parser.add_argument("--loop-hz", type=float, default=env_float("CENTER_LOOP_HZ", 15.0))
-    parser.add_argument("--center-timeout", type=float, default=env_float("CENTER_TIMEOUT", 100.0))
-    parser.add_argument("--stable-frames", type=int, default=env_int("CENTER_STABLE_FRAMES", 3))
-    parser.add_argument("--laser-hold-seconds", type=float, default=env_float("LASER_HOLD_SECONDS", 5.0))
-    parser.add_argument(
-        "--record-webrtc",
-        action=argparse.BooleanOptionalAction,
-        default=env_bool("CENTER_RECORD_WEBRTC_ENABLED", False),
-        help="Record annotated frames and serve the same annotated frames over WebRTC.",
-    )
-    parser.add_argument(
-        "--record-webrtc-output",
-        default=env_str("CENTER_RECORD_WEBRTC_OUTPUT", ""),
-        help="Annotated MP4 output path. Defaults to outputs/center_then_flash_YYYYmmdd_HHMMSS.mp4.",
-    )
-    parser.add_argument(
-        "--record-webrtc-fps",
-        type=float,
-        default=env_float("CENTER_RECORD_WEBRTC_FPS", env_float("CENTER_LOOP_HZ", 15.0)),
-    )
-    parser.add_argument(
-        "--record-webrtc-host",
-        default=env_str("CENTER_RECORD_WEBRTC_HOST", env_str("WEBRTC_HOST", "0.0.0.0")),
-    )
-    parser.add_argument(
-        "--record-webrtc-port",
-        type=int,
-        default=env_int("CENTER_RECORD_WEBRTC_PORT", env_int("WEBRTC_PORT", 8080)),
-    )
-    args = parser.parse_args()
-    control_conf_threshold()
-    if args.record_webrtc_fps <= 0:
-        raise ValueError("record-webrtc-fps must be greater than 0")
-    if args.record_webrtc_port <= 0:
-        raise ValueError("record-webrtc-port must be greater than 0")
-    args.record_webrtc_output = (
-        Path(args.record_webrtc_output) if args.record_webrtc_output else default_monitor_output_path()
-    )
-    return args
 
 
 def center_target(
@@ -743,62 +613,63 @@ def center_target(
     return False
 
 
-def run(args: argparse.Namespace) -> bool:
-    if args.center_timeout < 0:
-        raise ValueError("center-timeout must be non-negative")
-    if args.laser_hold_seconds < 0:
-        raise ValueError("laser-hold-seconds must be non-negative")
-    if args.stable_frames <= 0:
-        raise ValueError("stable-frames must be greater than 0")
+def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bool:
+    if runtime_config.webrtc.enabled and task_config.center.loop_hz <= 0:
+        raise ValueError("center.loop_hz must be greater than 0 when WebRTC is enabled")
+    if runtime_config.webrtc.port <= 0:
+        raise ValueError("TWOPOINT_WEBRTC_PORT must be greater than 0")
 
     inferencer = build_vision_inferencer(
-        backend=args.vision_backend,
-        onnx_path=args.onnx,
-        img_size=args.img_size,
+        backend=runtime_config.vision.backend,
+        onnx_path=runtime_config.vision.onnx_path,
+        img_size=runtime_config.vision.img_size,
     )
     servo = TargetCenterServo(
-        center_x=args.center_x,
-        center_y=args.center_y,
-        x_gain_deg=args.x_gain_deg,
-        y_gain_deg=args.y_gain_deg,
-        max_step_deg=args.max_step_deg,
-        deadband=args.deadband,
+        center_x=task_config.center.target_x,
+        center_y=task_config.center.target_y,
+        x_gain_deg=task_config.center.x_gain_deg,
+        y_gain_deg=task_config.center.y_gain_deg,
+        max_step_deg=task_config.center.max_step_deg,
+        deadband=task_config.center.deadband,
+        conf_threshold=task_config.center.conf_threshold,
     )
+    monitor_output_path = default_monitor_output_path(task_config.mode)
 
     with open_camera_capture(
-        camera_index=args.camera,
-        width=args.camera_width,
-        height=args.camera_height,
-        fps=args.camera_fps,
+        camera_index=task_config.camera.index,
+        width=task_config.camera.width,
+        height=task_config.camera.height,
+        fps=task_config.camera.fps,
     ) as capture, open_serial_gimbal(
-        port=args.port,
-        baudrate=args.baudrate,
-        x_id=args.x_id,
-        y_id=args.y_id,
-        speed_rpm=args.speed_rpm,
-        startup_delay=args.startup_delay,
-        command_interval=args.command_interval,
-        enable_settle_delay=args.enable_settle_delay,
-        debug_frames=args.debug_frames,
+        port=task_config.f32c.port,
+        baudrate=task_config.f32c.baudrate,
+        x_id=task_config.f32c.x_id,
+        y_id=task_config.f32c.y_id,
+        speed_rpm=task_config.f32c.speed_rpm,
+        startup_delay=task_config.f32c.startup_delay,
+        command_interval=task_config.f32c.command_interval,
+        enable_settle_delay=task_config.f32c.enable_settle_delay,
+        debug_frames=task_config.f32c.debug_frames,
     ) as gimbal, VisionProducer(
         capture=capture,
         inferencer=inferencer,
     ) as vision, open_laser_pointer(initial_on=False) as laser:
         with CenterRunMonitor(
-            enabled=args.record_webrtc,
-            output_path=args.record_webrtc_output,
-            fps=args.record_webrtc_fps,
-            webrtc_host=args.record_webrtc_host,
-            webrtc_port=args.record_webrtc_port,
-            backend=args.vision_backend,
+            enabled=runtime_config.webrtc.enabled,
+            output_path=monitor_output_path,
+            fps=task_config.center.loop_hz,
+            webrtc_host=runtime_config.webrtc.host,
+            webrtc_port=runtime_config.webrtc.port,
+            backend=runtime_config.vision.backend,
             providers=inferencer.providers,
+            conf_threshold=task_config.center.conf_threshold,
         ) as monitor:
-            print("task: center_then_flash")
-            print(f"task: backend={args.vision_backend}")
+            print(f"task: {task_config.mode}")
+            print(f"task: backend={runtime_config.vision.backend}")
             print(f"task: providers={inferencer.providers}")
-            print(f"task: center_timeout={args.center_timeout:.2f}s")
-            print(f"task: laser_hold_seconds={args.laser_hold_seconds:.2f}s")
-            print(f"monitor: record_webrtc={args.record_webrtc}")
+            print(f"task: center_timeout={task_config.center.timeout:.2f}s")
+            print(f"task: laser_hold_seconds={task_config.laser.hold_seconds:.2f}s")
+            print(f"monitor: record_webrtc={runtime_config.webrtc.enabled}")
 
             laser.off()
             gimbal.initialize()
@@ -808,25 +679,20 @@ def run(args: argparse.Namespace) -> bool:
                     vision=vision,
                     gimbal=gimbal,
                     servo=servo,
-                    loop_hz=args.loop_hz,
-                    timeout=args.center_timeout,
-                    stable_frames=args.stable_frames,
-                    on_frame=monitor.on_frame if args.record_webrtc else None,
+                    loop_hz=task_config.center.loop_hz,
+                    timeout=task_config.center.timeout,
+                    stable_frames=task_config.center.stable_frames,
+                    on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
                 )
 
-                print("laser: on")
-                laser.on()
-                time.sleep(args.laser_hold_seconds)
-                print("laser: off")
+                if centered or task_config.behavior.fire_after_timeout:
+                    print("laser: on")
+                    laser.on()
+                    time.sleep(task_config.laser.hold_seconds)
+                    print("laser: off")
+                else:
+                    print("laser: skipped because centering did not settle")
                 return centered
             finally:
                 laser.off()
                 gimbal.disable()
-
-
-def main() -> None:
-    raise SystemExit(0 if run(parse_args()) else 1)
-
-
-if __name__ == "__main__":
-    main()

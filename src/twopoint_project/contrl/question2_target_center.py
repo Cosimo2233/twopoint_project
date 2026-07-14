@@ -1,60 +1,16 @@
 from __future__ import annotations
 
-import argparse
-from argparse import ArgumentParser
-import os
-from pathlib import Path
-import sys
 import time
-
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-
-    def load_dotenv() -> bool:
-        return False
-
-if __package__ in {None, ""}:
-    sys.path.append(str(Path(__file__).resolve().parents[2]))
+from typing import Any
 
 from twopoint_project.contrl.target_center_servo import (
+    DEFAULT_CONTROL_CONF_THRESHOLD,
     TargetCenterServo,
-    control_conf_threshold,
     sleep_for_loop_rate,
 )
-from twopoint_project.f32c.gimbal import (
-    DEFAULT_BAUDRATE,
-    DEFAULT_COMMAND_INTERVAL,
-    DEFAULT_ENABLE_SETTLE_DELAY,
-    DEFAULT_SERIAL_PORT,
-    DEFAULT_SPEED_RPM,
-    DEFAULT_STARTUP_DELAY,
-    DEFAULT_X_ID,
-    DEFAULT_Y_ID,
-    open_serial_gimbal,
-)
-from twopoint_project.vision.inferencer import (
-    DEFAULT_IMG_SIZE,
-    DEFAULT_ONNX_PATH,
-    DEFAULT_VISION_BACKEND,
-    build_vision_inferencer,
-)
+from twopoint_project.f32c.gimbal import open_serial_gimbal
+from twopoint_project.vision.inferencer import build_vision_inferencer
 from twopoint_project.vision.pipeline import VisionProducer
-
-
-def env_str(name: str, default: str) -> str:
-    value = os.getenv(name)
-    return default if value is None or value == "" else value
-
-
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return default if value is None or value == "" else int(value)
-
-
-def env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    return default if value is None or value == "" else float(value)
 
 
 def open_camera_capture(
@@ -74,47 +30,7 @@ def open_camera_capture(
     )
 
 
-def parse_args() -> argparse.Namespace:
-    load_dotenv()
-    parser = ArgumentParser(
-        description=(
-            "Question 2 target-center servo: keep target_center in view and move "
-            "the camera center toward it. This mode does not search for a missing target."
-        )
-    )
-    parser.add_argument("--onnx", default=env_str("TWOPOINT_ONNX_PATH", DEFAULT_ONNX_PATH))
-    parser.add_argument("--vision-backend", default=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND))
-    parser.add_argument("--img-size", type=int, default=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE))
-    parser.add_argument("--camera", type=int, default=0)
-    parser.add_argument("--camera-width", type=int, default=640)
-    parser.add_argument("--camera-height", type=int, default=480)
-    parser.add_argument("--camera-fps", type=int, default=30)
-
-    parser.add_argument("--port", default=DEFAULT_SERIAL_PORT)
-    parser.add_argument("--baudrate", type=int, default=DEFAULT_BAUDRATE)
-    parser.add_argument("--x-id", type=int, default=DEFAULT_X_ID)
-    parser.add_argument("--y-id", type=int, default=DEFAULT_Y_ID)
-    parser.add_argument("--speed-rpm", type=int, default=DEFAULT_SPEED_RPM)
-    parser.add_argument("--startup-delay", type=float, default=DEFAULT_STARTUP_DELAY)
-    parser.add_argument("--command-interval", type=float, default=DEFAULT_COMMAND_INTERVAL)
-    parser.add_argument("--enable-settle-delay", type=float, default=DEFAULT_ENABLE_SETTLE_DELAY)
-    parser.add_argument("--debug-frames", action="store_true")
-
-    parser.add_argument("--center-x", type=float, default=0.5)
-    parser.add_argument("--center-y", type=float, default=0.5)
-    parser.add_argument("--x-gain-deg", type=float, default=8.0)
-    parser.add_argument("--y-gain-deg", type=float, default=-8.0)
-    parser.add_argument("--max-step-deg", type=float, default=1.0)
-    parser.add_argument("--deadband", type=float, default=0.006)
-    parser.add_argument("--loop-hz", type=float, default=15.0)
-    parser.add_argument("--timeout", type=float, default=2.0)
-    parser.add_argument("--stable-frames", type=int, default=3)
-    args = parser.parse_args()
-    control_conf_threshold()
-    return args
-
-
-def run(args: argparse.Namespace) -> bool:
+def run(args: Any) -> bool:
     inferencer = build_vision_inferencer(
         backend=args.vision_backend,
         onnx_path=args.onnx,
@@ -127,6 +43,7 @@ def run(args: argparse.Namespace) -> bool:
         y_gain_deg=args.y_gain_deg,
         max_step_deg=args.max_step_deg,
         deadband=args.deadband,
+        conf_threshold=getattr(args, "conf_threshold", DEFAULT_CONTROL_CONF_THRESHOLD),
     )
 
     deadline = time.monotonic() + args.timeout
@@ -196,11 +113,3 @@ def run(args: argparse.Namespace) -> bool:
 
     print("question2: timeout before stable centering")
     return False
-
-
-def main() -> None:
-    raise SystemExit(0 if run(parse_args()) else 1)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 import unittest
 from argparse import Namespace
-from pathlib import Path
 from unittest.mock import patch
 
 from twopoint_project.f32c import cli
@@ -74,31 +71,9 @@ class F32CGimbalTest(unittest.TestCase):
 
 
 class F32CCliTest(unittest.TestCase):
-    def test_debug_frames_can_follow_subcommand(self) -> None:
-        with patch.object(
-            sys,
-            "argv",
-            ["cli.py", "--port", "/dev/ttyAS4", "disable", "--debug-frames"],
-        ):
-            args = cli.parse_args()
-
-        self.assertEqual(args.command, "disable")
-        self.assertEqual(args.port, "/dev/ttyAS4")
-        self.assertTrue(args.debug_frames)
-
-    def test_help_displays(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        result = subprocess.run(
-            [sys.executable, "-m", "twopoint_project.f32c.cli", "--help"],
-            cwd=repo_root,
-            env={"PYTHONPATH": str(repo_root / "src")},
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("move-by", result.stdout)
+    def test_module_no_longer_exposes_standalone_parser(self) -> None:
+        self.assertFalse(hasattr(cli, "parse_args"))
+        self.assertFalse(hasattr(cli, "main"))
 
     def test_move_by_opens_gimbal_and_sends_offsets(self) -> None:
         serial_port = FakeSerial()

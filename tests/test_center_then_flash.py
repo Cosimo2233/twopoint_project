@@ -1,19 +1,29 @@
 from __future__ import annotations
 
-from argparse import Namespace
-import os
-import sys
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
+from twopoint_project.config import (
+    BehaviorConfig,
+    CameraConfig,
+    CenterConfig,
+    CenterThenFlashConfig,
+    F32CConfig,
+    LaserConfig,
+    RuntimeConfig,
+    VisionConfig,
+    WebRtcConfig,
+)
 from twopoint_project.contrl import center_then_flash
 
 
 class FakeCapture:
     def __init__(self, *args: object, **kwargs: object) -> None:
-        self.frame = Namespace(frame_id=1, frame_bgr=np.zeros((480, 640, 3), dtype=np.uint8))
+        self.frame = SimpleNamespace(frame_id=1, frame_bgr=np.zeros((480, 640, 3), dtype=np.uint8))
         self.closed = False
 
     def __enter__(self) -> FakeCapture:
@@ -74,50 +84,51 @@ class FakeInferencer:
         return [{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}]
 
 
-def make_args() -> Namespace:
-    return Namespace(
-        camera=0,
-        camera_width=640,
-        camera_height=480,
-        camera_fps=30,
-        port="/dev/null",
-        baudrate=115200,
-        x_id=1,
-        y_id=2,
-        speed_rpm=100,
-        startup_delay=0,
-        command_interval=0,
-        enable_settle_delay=0,
-        debug_frames=False,
-        center_x=0.5,
-        center_y=0.5,
-        x_gain_deg=8.0,
-        y_gain_deg=-8.0,
-        max_step_deg=1.0,
-        deadband=0.006,
-        loop_hz=0,
-        center_timeout=2.0,
-        stable_frames=1,
-        laser_hold_seconds=0,
-        vision_backend="traditional",
-        onnx="model-bin/runs/twopoint/best.onnx",
-        img_size=640,
-        record_webrtc=False,
-        record_webrtc_output="",
-        record_webrtc_fps=15.0,
-        record_webrtc_host="0.0.0.0",
-        record_webrtc_port=8080,
+def make_task_config() -> CenterThenFlashConfig:
+    return CenterThenFlashConfig(
+        mode="center_then_flash",
+        camera=CameraConfig(index=0, width=640, height=480, fps=30),
+        f32c=F32CConfig(
+            port="/dev/null",
+            baudrate=115200,
+            x_id=1,
+            y_id=2,
+            speed_rpm=100,
+            startup_delay=0,
+            command_interval=0,
+            enable_settle_delay=0,
+            debug_frames=False,
+        ),
+        center=CenterConfig(
+            conf_threshold=0.5,
+            target_x=0.5,
+            target_y=0.5,
+            x_gain_deg=8.0,
+            y_gain_deg=-8.0,
+            max_step_deg=1.0,
+            deadband=0.006,
+            loop_hz=0,
+            timeout=2.0,
+            stable_frames=1,
+        ),
+        laser=LaserConfig(hold_seconds=0),
+        behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=True),
+    )
+
+
+def make_runtime_config() -> RuntimeConfig:
+    return RuntimeConfig(
+        config_path=Path("unused.json"),
+        vision=VisionConfig(
+            backend="traditional",
+            onnx_path="model-bin/runs/twopoint/best.onnx",
+            img_size=640,
+        ),
+        webrtc=WebRtcConfig(enabled=False, host="0.0.0.0", port=8080),
     )
 
 
 class CenterThenFlashTest(unittest.TestCase):
-    def test_parse_args_does_not_expose_initial_zero_config(self) -> None:
-        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", ["prog"]):
-            args = center_then_flash.parse_args()
-
-        self.assertFalse(hasattr(args, "init_zero"))
-        self.assertFalse(hasattr(args, "conf_threshold"))
-
     def test_run_centers_then_turns_laser_on_and_disables_gimbal(self) -> None:
         fake_gimbal = FakeGimbal()
         fake_laser = FakeLaser()
@@ -135,7 +146,7 @@ class CenterThenFlashTest(unittest.TestCase):
             "build_vision_inferencer",
             return_value=FakeInferencer(),
         ) as build_vision_inferencer:
-            result = center_then_flash.run(make_args())
+            result = center_then_flash.run(make_task_config(), make_runtime_config())
 
         self.assertTrue(result)
         build_vision_inferencer.assert_called_once_with(
