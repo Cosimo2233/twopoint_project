@@ -6,14 +6,10 @@ from types import TracebackType
 from typing import Callable, Protocol, Type
 
 
-A7A_LASER_POWER_PIN = 1
-A7A_LASER_CONTROL_PIN = 3
-A7A_LASER_GPIO_NAME = "PJ23"
 A7A_LASER_GPIO_CHIP = "/dev/gpiochip0"
-# Radxa A7A physical pin 3 maps to PJ23: 23 + 32 * J(9) = 311.
-A7A_LASER_GPIO_LINE = 23 + 32 * 9
-# Red wire on pin 1 (+3.3V), black wire on pin 3: low level turns the laser on.
-A7A_LASER_ACTIVE_LOW = True
+# Cubie A7A physical pin 8 maps to PB9: 9 + 32 * B(1) = 41.
+A7A_LASER_GPIO_LINE = 41
+A7A_LASER_ACTIVE_LOW = False
 DEFAULT_PULSE_SECONDS = 0.1
 
 

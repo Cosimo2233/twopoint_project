@@ -41,6 +41,16 @@ class FakeGPIOFactory:
 
 
 class LaserPointerTest(unittest.TestCase):
+    def test_active_high_turns_on_with_high_level(self) -> None:
+        gpio = FakeGPIO(initial_level=False)
+        laser = LaserPointer(gpio, active_low=False)
+
+        laser.on()
+        laser.off()
+
+        self.assertEqual(gpio.values, [False, True, False])
+        self.assertFalse(laser.enabled)
+
     def test_active_low_turns_on_with_low_level(self) -> None:
         gpio = FakeGPIO(initial_level=True)
         laser = LaserPointer(gpio, active_low=True)
@@ -72,14 +82,14 @@ class LaserPointerTest(unittest.TestCase):
         self.assertEqual(gpio.values[-1], True)
         self.assertTrue(gpio.closed)
 
-    def test_open_laser_pointer_uses_a7a_pin3_safely_off_by_default(self) -> None:
+    def test_open_laser_pointer_uses_a7a_laser_gpio_safely_off_by_default(self) -> None:
         factory = FakeGPIOFactory()
 
         laser = open_laser_pointer(gpio_factory=factory)
 
         self.assertEqual(
             factory.calls,
-            [((A7A_LASER_GPIO_CHIP, A7A_LASER_GPIO_LINE, "high"), {"label": "twopoint-laser"})],
+            [((A7A_LASER_GPIO_CHIP, A7A_LASER_GPIO_LINE, "low"), {"label": "twopoint-laser"})],
         )
         self.assertFalse(laser.enabled)
 
@@ -88,14 +98,14 @@ class LaserPointerTest(unittest.TestCase):
 
         laser = open_laser_pointer(initial_on=True, gpio_factory=factory)
 
-        self.assertEqual(factory.calls[0][0], (A7A_LASER_GPIO_CHIP, A7A_LASER_GPIO_LINE, "low"))
+        self.assertEqual(factory.calls[0][0], (A7A_LASER_GPIO_CHIP, A7A_LASER_GPIO_LINE, "high"))
         self.assertTrue(laser.enabled)
 
     def test_open_laser_pointer_explains_busy_gpio(self) -> None:
         def busy_factory(*args: object, **kwargs: object) -> FakeGPIO:
             raise OSError(errno.EBUSY, "Device or resource busy")
 
-        with self.assertRaisesRegex(RuntimeError, "line 311 is busy"):
+        with self.assertRaisesRegex(RuntimeError, "line 41 is busy"):
             open_laser_pointer(gpio_factory=busy_factory)
 
 

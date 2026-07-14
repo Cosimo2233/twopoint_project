@@ -32,14 +32,22 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_Y_ID,
     open_serial_gimbal,
 )
-
-
-DEFAULT_VISION_BACKEND = "traditional"
+from twopoint_project.vision.inferencer import (
+    DEFAULT_IMG_SIZE,
+    DEFAULT_ONNX_PATH,
+    DEFAULT_VISION_BACKEND,
+    build_vision_inferencer,
+)
 
 
 def env_str(name: str, default: str) -> str:
     value = os.getenv(name)
     return default if value is None or value == "" else value
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    return default if value is None or value == "" else int(value)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,9 +58,9 @@ def parse_args() -> argparse.Namespace:
             "the camera center toward it. This mode does not search for a missing target."
         )
     )
-    parser.add_argument("--onnx", default="model-bin/best.onnx")
+    parser.add_argument("--onnx", default=env_str("TWOPOINT_ONNX_PATH", DEFAULT_ONNX_PATH))
     parser.add_argument("--vision-backend", default=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND))
-    parser.add_argument("--img-size", type=int, default=640)
+    parser.add_argument("--img-size", type=int, default=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE))
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -85,20 +93,11 @@ def parse_args() -> argparse.Namespace:
 def run(args: argparse.Namespace) -> bool:
     from twopoint_project.vision.capture import CameraCapture
 
-    backend = args.vision_backend.strip().lower()
-    if backend == "traditional":
-        from twopoint_project.vision2.infer_traditional import TraditionalVisionInferencer
-
-        inferencer = TraditionalVisionInferencer()
-    elif backend == "onnx":
-        from twopoint_project.vision.infer_twopoint_onnx import TwoPointOnnxInferencer
-
-        inferencer = TwoPointOnnxInferencer(Path(args.onnx), img_size=args.img_size)
-    else:
-        raise ValueError(
-            "unsupported vision backend: "
-            f"{args.vision_backend!r}; expected 'traditional' or 'onnx'"
-        )
+    inferencer = build_vision_inferencer(
+        backend=args.vision_backend,
+        onnx_path=args.onnx,
+        img_size=args.img_size,
+    )
     servo = TargetCenterServo(
         center_x=args.center_x,
         center_y=args.center_y,
