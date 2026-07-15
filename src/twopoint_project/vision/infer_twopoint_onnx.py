@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import argparse
-from argparse import ArgumentParser
-import json
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -30,19 +27,6 @@ class PointPrediction(TypedDict):
     x: float
     y: float
     confidence: float
-
-
-def parse_args() -> argparse.Namespace:
-    parser = ArgumentParser(description="Run single-image ONNX inference for the two-point detector.")
-    parser.add_argument("--onnx", default="model-bin/runs/twopoint/best.onnx", help="Path to the ONNX model.")
-    parser.add_argument("--image", required=True, help="Input image path.")
-    parser.add_argument("--output", default=None, help="Optional explicit annotated image path.")
-    parser.add_argument("--output-dir", default="outputs", help="Directory for annotated images.")
-    parser.add_argument("--img-size", type=int, default=640, help="Fallback square input size.")
-    parser.add_argument("--conf-threshold", type=float, default=0.0, help="Hide debug points below this confidence.")
-    parser.add_argument("--radius", type=int, default=5, help="Point radius in pixels.")
-    parser.add_argument("--save-json", action="store_true", help="Also save restored coordinates as JSON.")
-    return parser.parse_args()
 
 
 def default_output_path(image_path: Path, output_dir: Path) -> Path:
@@ -281,47 +265,3 @@ def draw_predictions(
         label = f"{name}: ({point['x']:.1f}, {point['y']:.1f}) conf={point['confidence']:.2f}"
         draw_label(annotated, label, (x + radius + 6, y - radius - 6), color)
     return annotated
-
-
-def main() -> None:
-    args = parse_args()
-    onnx_path = Path(args.onnx)
-    image_path = Path(args.image)
-    output_path = Path(args.output) if args.output else default_output_path(image_path, Path(args.output_dir))
-
-    frame_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if frame_bgr is None:
-        raise FileNotFoundError(f"Failed to read image: {image_path}")
-
-    inferencer = TwoPointOnnxInferencer(onnx_path, args.img_size)
-    predictions = inferencer.predict(frame_bgr)
-    restored_for_debug = points_for_drawing(
-        predictions,
-        image_width=frame_bgr.shape[1],
-        image_height=frame_bgr.shape[0],
-    )
-
-    annotated = draw_predictions(frame_bgr, restored_for_debug, args.conf_threshold, args.radius)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(output_path), annotated):
-        raise RuntimeError(f"Failed to save annotated image: {output_path}")
-
-    if args.save_json:
-        json_path = output_path.with_suffix(".json")
-        json_path.write_text(json.dumps(predictions, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"Saved JSON: {json_path}")
-
-    print(f"image       : {image_path}")
-    print(f"onnx        : {onnx_path}")
-    print(f"input_name  : {inferencer.input_name}")
-    print(f"providers   : {inferencer.providers}")
-    print(f"saved_vis   : {output_path}")
-    for point in predictions:
-        print(
-            f"{point['label']}: "
-            f"x={point['x']:.6f}, y={point['y']:.6f}, confidence={point['confidence']:.4f}"
-        )
-
-
-if __name__ == "__main__":
-    main()
