@@ -152,6 +152,94 @@ class TargetCenterServoTest(unittest.TestCase):
         assert second.x_output is not None
         self.assertAlmostEqual(second.x_output.i, 0.5)
 
+    def test_integral_separation_resets_integral_on_large_error(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(
+                kp=0.0,
+                ki=10.0,
+                kd=0.0,
+                integral_limit=1.0,
+                integral_separation_threshold=0.05,
+                output_limit_deg=10.0,
+            ),
+            y_pid=PIDAxisGains(kp=0.0, output_limit_deg=10.0),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+
+        first = servo.compute_step(TargetCenterObservation(x=0.53, y=0.5, confidence=1.0), now=1.0)
+        second = servo.compute_step(TargetCenterObservation(x=0.53, y=0.5, confidence=1.0), now=2.0)
+        third = servo.compute_step(TargetCenterObservation(x=0.70, y=0.5, confidence=1.0), now=3.0)
+
+        self.assertIsNotNone(first.x_output)
+        self.assertIsNotNone(second.x_output)
+        self.assertIsNotNone(third.x_output)
+        assert first.x_output is not None
+        assert second.x_output is not None
+        assert third.x_output is not None
+        self.assertAlmostEqual(first.x_output.i, 0.0)
+        self.assertAlmostEqual(second.x_output.i, 0.3)
+        self.assertAlmostEqual(third.x_output.i, 0.0)
+
+    def test_derivative_separation_disables_d_on_large_error(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(
+                kp=0.0,
+                ki=0.0,
+                kd=1.0,
+                derivative_separation_threshold=0.05,
+                output_limit_deg=10.0,
+            ),
+            y_pid=PIDAxisGains(kp=0.0, output_limit_deg=10.0),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+
+        near = servo.compute_step(TargetCenterObservation(x=0.52, y=0.5, confidence=1.0), now=1.0)
+        small_change = servo.compute_step(TargetCenterObservation(x=0.54, y=0.5, confidence=1.0), now=2.0)
+        large_error = servo.compute_step(TargetCenterObservation(x=0.70, y=0.5, confidence=1.0), now=3.0)
+
+        self.assertIsNotNone(near.x_output)
+        self.assertIsNotNone(small_change.x_output)
+        self.assertIsNotNone(large_error.x_output)
+        assert small_change.x_output is not None
+        assert large_error.x_output is not None
+        self.assertAlmostEqual(small_change.x_output.d, 0.02)
+        self.assertAlmostEqual(large_error.x_output.d, 0.0)
+        self.assertAlmostEqual(large_error.x_output.derivative, 0.0)
+
+    def test_fuzzy_pid_scales_only_kp(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(
+                kp=10.0,
+                ki=2.0,
+                kd=3.0,
+                fuzzy_enabled=True,
+                fuzzy_error_low=0.02,
+                fuzzy_error_high=0.20,
+                fuzzy_kp_near_scale=0.5,
+                fuzzy_kp_far_scale=1.5,
+                output_limit_deg=10.0,
+            ),
+            y_pid=PIDAxisGains(kp=0.0, output_limit_deg=10.0),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+
+        near = servo.compute_step(TargetCenterObservation(x=0.51, y=0.5, confidence=1.0), now=1.0)
+        far = servo.compute_step(TargetCenterObservation(x=0.80, y=0.5, confidence=1.0), now=2.0)
+
+        self.assertIsNotNone(near.x_output)
+        self.assertIsNotNone(far.x_output)
+        assert near.x_output is not None
+        assert far.x_output is not None
+        self.assertAlmostEqual(near.x_output.effective_kp, 5.0)
+        self.assertAlmostEqual(far.x_output.effective_kp, 15.0)
+        self.assertAlmostEqual(near.x_output.effective_ki, 2.0)
+        self.assertAlmostEqual(far.x_output.effective_ki, 2.0)
+        self.assertAlmostEqual(near.x_output.effective_kd, 3.0)
+        self.assertAlmostEqual(far.x_output.effective_kd, 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()

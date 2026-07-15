@@ -139,6 +139,13 @@ def pid_axis_from_dict(data: dict[str, Any], *, kp: float, output_limit_deg: flo
         kd=float(data.get("kd", 0.0)),
         integral_limit=float(data.get("integral_limit", 0.0)),
         output_limit_deg=float(data.get("output_limit_deg", output_limit_deg)),
+        integral_separation_threshold=float(data.get("integral_separation_threshold", 0.0)),
+        derivative_separation_threshold=float(data.get("derivative_separation_threshold", 0.0)),
+        fuzzy_enabled=bool(data.get("fuzzy_enabled", False)),
+        fuzzy_error_low=float(data.get("fuzzy_error_low", 0.02)),
+        fuzzy_error_high=float(data.get("fuzzy_error_high", 0.18)),
+        fuzzy_kp_near_scale=float(data.get("fuzzy_kp_near_scale", 0.65)),
+        fuzzy_kp_far_scale=float(data.get("fuzzy_kp_far_scale", 1.25)),
     )
 
 

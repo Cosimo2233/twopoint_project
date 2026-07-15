@@ -23,18 +23,32 @@
     "target_y": 0.5,
     "pid": {
       "x": {
-        "kp": -12.0,
-        "ki": 0.0,
-        "kd": 2.0,
+        "kp": -10.0,
+        "ki": 0.1,
+        "kd": -1.0,
         "integral_limit": 0.2,
-        "output_limit_deg": 90.0
+        "output_limit_deg": 30.0,
+        "integral_separation_threshold": 0.04,
+        "derivative_separation_threshold": 0.12,
+        "fuzzy_enabled": true,
+        "fuzzy_error_low": 0.02,
+        "fuzzy_error_high": 0.20,
+        "fuzzy_kp_near_scale": 0.75,
+        "fuzzy_kp_far_scale": 1.25
       },
       "y": {
-        "kp": 12.0,
-        "ki": 0.0,
-        "kd": 2.0,
+        "kp": 10.0,
+        "ki": 0.1,
+        "kd": 1.0,
         "integral_limit": 0.2,
-        "output_limit_deg": 90.0
+        "output_limit_deg": 30.0,
+        "integral_separation_threshold": 0.04,
+        "derivative_separation_threshold": 0.12,
+        "fuzzy_enabled": true,
+        "fuzzy_error_low": 0.02,
+        "fuzzy_error_high": 0.20,
+        "fuzzy_kp_near_scale": 0.75,
+        "fuzzy_kp_far_scale": 1.25
       }
     },
     "deadband": 0.006,
