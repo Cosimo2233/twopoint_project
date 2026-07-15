@@ -808,6 +808,7 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
         conf_threshold=task_config.center.conf_threshold,
         x_pid=task_config.center.pid.x if task_config.center.pid is not None else None,
         y_pid=task_config.center.pid.y if task_config.center.pid is not None else None,
+        feedforward=task_config.center.feedforward,
     )
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
@@ -899,6 +900,7 @@ def run_track(
         conf_threshold=task_config.center.conf_threshold,
         x_pid=task_config.center.pid.x if task_config.center.pid is not None else None,
         y_pid=task_config.center.pid.y if task_config.center.pid is not None else None,
+        feedforward=task_config.center.feedforward,
     )
     monitor_output_path = default_monitor_output_path(task_config.mode)
 

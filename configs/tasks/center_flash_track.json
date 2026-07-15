@@ -51,6 +51,13 @@
         "fuzzy_kp_far_scale": 1.25
       }
     },
+    "feedforward": {
+      "enabled": true,
+      "lead_time": 0.12,
+      "max_prediction_error": 0.06,
+      "max_velocity": 1.2,
+      "velocity_alpha": 0.6
+    },
     "deadband": 0.006,
     "loop_hz": 15.0,
     "stale_target_seconds": 0.3,

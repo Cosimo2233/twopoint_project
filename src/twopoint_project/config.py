@@ -6,7 +6,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from twopoint_project.contrl.target_center_servo import PIDAxisGains, validate_conf_threshold
+from twopoint_project.contrl.target_center_servo import (
+    FeedForwardConfig,
+    PIDAxisGains,
+    validate_conf_threshold,
+)
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
@@ -149,6 +153,16 @@ def pid_axis_from_dict(data: dict[str, Any], *, kp: float, output_limit_deg: flo
     )
 
 
+def feedforward_from_dict(data: dict[str, Any]) -> FeedForwardConfig:
+    return FeedForwardConfig(
+        enabled=bool(data.get("enabled", False)),
+        lead_time=float(data.get("lead_time", 0.0)),
+        max_prediction_error=float(data.get("max_prediction_error", 0.05)),
+        max_velocity=float(data.get("max_velocity", 2.0)),
+        velocity_alpha=float(data.get("velocity_alpha", 0.5)),
+    )
+
+
 @dataclass(frozen=True)
 class CenterConfig:
     conf_threshold: float = 0.5
@@ -164,6 +178,7 @@ class CenterConfig:
     timeout: float = 100.0
     stable_frames: int = 3
     pid: PIDConfig | None = None
+    feedforward: FeedForwardConfig = FeedForwardConfig()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterConfig:
@@ -184,6 +199,7 @@ class CenterConfig:
         if not 0.0 <= stale_target_step_scale <= 1.0:
             raise ValueError("center.stale_target_step_scale must be between 0 and 1")
         pid_data = section(data, "pid") if "pid" in data else {}
+        feedforward_data = section(data, "feedforward") if "feedforward" in data else {}
         return cls(
             conf_threshold=conf_threshold,
             target_x=float(data.get("target_x", cls.target_x)),
@@ -203,6 +219,7 @@ class CenterConfig:
                 y_gain_deg=y_gain_deg,
                 max_step_deg=max_step_deg,
             ),
+            feedforward=feedforward_from_dict(feedforward_data),
         )
 
 

@@ -4,6 +4,7 @@ import unittest
 
 from twopoint_project.contrl.target_center_servo import (
     DEFAULT_CONTROL_CONF_THRESHOLD,
+    FeedForwardConfig,
     PIDAxisGains,
     TargetCenterObservation,
     TargetCenterServo,
@@ -239,6 +240,55 @@ class TargetCenterServoTest(unittest.TestCase):
         self.assertAlmostEqual(far.x_output.effective_ki, 2.0)
         self.assertAlmostEqual(near.x_output.effective_kd, 3.0)
         self.assertAlmostEqual(far.x_output.effective_kd, 3.0)
+
+    def test_feedforward_predicts_target_position_from_velocity(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(kp=10.0, output_limit_deg=10.0),
+            y_pid=PIDAxisGains(kp=10.0, output_limit_deg=10.0),
+            feedforward=FeedForwardConfig(
+                enabled=True,
+                lead_time=0.1,
+                max_prediction_error=0.1,
+                max_velocity=2.0,
+                velocity_alpha=1.0,
+            ),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+
+        first = servo.compute_step(TargetCenterObservation(x=0.50, y=0.50, confidence=1.0), now=1.0)
+        second = servo.compute_step(TargetCenterObservation(x=0.60, y=0.50, confidence=1.0), now=1.1)
+
+        self.assertAlmostEqual(first.feedforward_x, 0.0)
+        self.assertAlmostEqual(second.target_velocity_x, 1.0)
+        self.assertAlmostEqual(second.feedforward_x, 0.1)
+        self.assertAlmostEqual(second.error.x, 0.2)
+        self.assertAlmostEqual(second.x_delta_deg, 2.0)
+
+    def test_feedforward_resets_when_target_is_missing(self) -> None:
+        servo = TargetCenterServo(
+            x_pid=PIDAxisGains(kp=10.0, output_limit_deg=10.0),
+            y_pid=PIDAxisGains(kp=10.0, output_limit_deg=10.0),
+            feedforward=FeedForwardConfig(
+                enabled=True,
+                lead_time=0.1,
+                max_prediction_error=0.1,
+                max_velocity=2.0,
+                velocity_alpha=1.0,
+            ),
+            deadband=0.0,
+            conf_threshold=0.5,
+        )
+        gimbal = FakeGimbal()
+
+        servo.compute_step(TargetCenterObservation(x=0.50, y=0.50, confidence=1.0), now=1.0)
+        servo.compute_step(TargetCenterObservation(x=0.60, y=0.50, confidence=1.0), now=1.1)
+        invalid = servo.update(gimbal, [])
+        after_reset = servo.compute_step(TargetCenterObservation(x=0.70, y=0.50, confidence=1.0), now=2.0)
+
+        self.assertFalse(invalid.valid)
+        self.assertAlmostEqual(after_reset.feedforward_x, 0.0)
+        self.assertAlmostEqual(after_reset.target_velocity_x, 0.0)
 
 
 if __name__ == "__main__":

@@ -61,6 +61,21 @@ class TargetCenterObservation:
 
 
 @dataclass(frozen=True)
+class FeedForwardConfig:
+    """视觉前馈预测配置。
+
+    enabled=True 时，根据 target_center 的图像坐标速度预测 lead_time 秒后的
+    目标位置，再把预测位置送入 PID。坐标、速度都使用归一化图像坐标。
+    """
+
+    enabled: bool = False
+    lead_time: float = 0.0
+    max_prediction_error: float = 0.05
+    max_velocity: float = 2.0
+    velocity_alpha: float = 0.5
+
+
+@dataclass(frozen=True)
 class CenteringError:
     """目标点相对期望中心点的误差。"""
 
@@ -79,6 +94,10 @@ class GimbalStep:
     settled: bool
     x_output: PIDOutput | None = None
     y_output: PIDOutput | None = None
+    feedforward_x: float = 0.0
+    feedforward_y: float = 0.0
+    target_velocity_x: float = 0.0
+    target_velocity_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -302,6 +321,7 @@ class TargetCenterServo:
         conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
         x_pid: PIDAxisGains | None = None,
         y_pid: PIDAxisGains | None = None,
+        feedforward: FeedForwardConfig | None = None,
     ) -> None:
         self.center_x = center_x
         self.center_y = center_y
@@ -309,8 +329,13 @@ class TargetCenterServo:
         self.conf_threshold = validate_conf_threshold(conf_threshold)
         self.x_pid = x_pid or PIDAxisGains(kp=x_gain_deg, output_limit_deg=max_step_deg)
         self.y_pid = y_pid or PIDAxisGains(kp=y_gain_deg, output_limit_deg=max_step_deg)
+        self.feedforward = feedforward or FeedForwardConfig()
         self._x_state = PIDAxisState()
         self._y_state = PIDAxisState()
+        self._previous_target: TargetCenterObservation | None = None
+        self._previous_target_time: float | None = None
+        self._target_velocity_x = 0.0
+        self._target_velocity_y = 0.0
 
     def compute_error(self, target: TargetCenterObservation) -> CenteringError:
         """计算目标点到期望中心的归一化坐标误差。"""
@@ -322,9 +347,68 @@ class TargetCenterServo:
             distance=hypot(x_error, y_error),
         )
 
+    def reset_feedforward(self) -> None:
+        """清空目标运动预测状态。"""
+        self._previous_target = None
+        self._previous_target_time = None
+        self._target_velocity_x = 0.0
+        self._target_velocity_y = 0.0
+
+    def predict_target(
+        self,
+        target: TargetCenterObservation,
+        *,
+        now: float,
+    ) -> tuple[TargetCenterObservation, float, float]:
+        """用目标点运动速度预测前馈目标位置。"""
+        config = self.feedforward
+        if not config.enabled or config.lead_time <= 0:
+            return target, 0.0, 0.0
+
+        previous = self._previous_target
+        previous_time = self._previous_target_time
+        velocity_x = self._target_velocity_x
+        velocity_y = self._target_velocity_y
+        dt = 0.0 if previous_time is None else max(now - previous_time, 0.0)
+
+        if previous is not None and dt > 0:
+            raw_velocity_x = (target.x - previous.x) / dt
+            raw_velocity_y = (target.y - previous.y) / dt
+            max_velocity = abs(config.max_velocity)
+            if max_velocity > 0:
+                raw_velocity_x = clamp(raw_velocity_x, -max_velocity, max_velocity)
+                raw_velocity_y = clamp(raw_velocity_y, -max_velocity, max_velocity)
+            alpha = clamp(config.velocity_alpha, 0.0, 1.0)
+            velocity_x = lerp(velocity_x, raw_velocity_x, alpha)
+            velocity_y = lerp(velocity_y, raw_velocity_y, alpha)
+
+        max_prediction = abs(config.max_prediction_error)
+        feedforward_x = velocity_x * config.lead_time
+        feedforward_y = velocity_y * config.lead_time
+        if max_prediction > 0:
+            feedforward_x = clamp(feedforward_x, -max_prediction, max_prediction)
+            feedforward_y = clamp(feedforward_y, -max_prediction, max_prediction)
+
+        self._target_velocity_x = velocity_x
+        self._target_velocity_y = velocity_y
+        predicted = TargetCenterObservation(
+            x=clamp(target.x + feedforward_x, 0.0, 1.0),
+            y=clamp(target.y + feedforward_y, 0.0, 1.0),
+            confidence=target.confidence,
+        )
+        return predicted, predicted.x - target.x, predicted.y - target.y
+
     def compute_step(self, target: TargetCenterObservation, *, now: float | None = None) -> GimbalStep:
         """根据当前目标点计算云台本轮应该移动的角度。"""
-        error = self.compute_error(target)
+        now = time.monotonic() if now is None else now
+        control_target, feedforward_x, feedforward_y = self.predict_target(
+            target,
+            now=now,
+        )
+        self._previous_target = target
+        self._previous_target_time = now
+
+        error = self.compute_error(control_target)
         x_settled = abs(error.x) <= self.deadband
         y_settled = abs(error.y) <= self.deadband
         settled = x_settled and y_settled
@@ -341,9 +425,12 @@ class TargetCenterServo:
                 settled=True,
                 x_output=None,
                 y_output=None,
+                feedforward_x=feedforward_x,
+                feedforward_y=feedforward_y,
+                target_velocity_x=self._target_velocity_x,
+                target_velocity_y=self._target_velocity_y,
             )
 
-        now = time.monotonic() if now is None else now
         if x_settled:
             # 单轴已进入死区时，只停止该轴，另一轴仍可继续修正。
             self._x_state.reset()
@@ -368,6 +455,10 @@ class TargetCenterServo:
             settled=settled,
             x_output=x_output,
             y_output=y_output,
+            feedforward_x=feedforward_x,
+            feedforward_y=feedforward_y,
+            target_velocity_x=self._target_velocity_x,
+            target_velocity_y=self._target_velocity_y,
         )
 
     def update(
@@ -382,6 +473,7 @@ class TargetCenterServo:
             raise ValueError("step_scale must be non-negative")
         target = select_target_center(points, conf_threshold=self.conf_threshold)
         if target is None:
+            self.reset_feedforward()
             return AimUpdate(
                 valid=False,
                 moved=False,

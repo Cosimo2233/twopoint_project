@@ -1,6 +1,7 @@
 from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     CenteringError,
+    FeedForwardConfig,
     GimbalStep,
     TargetCenterObservation,
     TargetCenterServo,
@@ -12,6 +13,7 @@ from twopoint_project.contrl.target_center_servo import (
 __all__ = [
     "AimUpdate",
     "CenteringError",
+    "FeedForwardConfig",
     "GimbalStep",
     "TargetCenterObservation",
     "TargetCenterServo",
