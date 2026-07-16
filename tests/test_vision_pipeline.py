@@ -10,6 +10,12 @@ from twopoint_project.vision.pipeline import LatestVisionQueue, VisionFrame, Vis
 
 def make_frame(frame_id: int) -> VisionFrame:
     return VisionFrame(
+        camera_id="test-camera",
+        stream_generation=1,
+        source_frame_id=frame_id,
+        captured_at_monotonic_ns=1,
+        inference_started_monotonic_ns=2,
+        inference_finished_monotonic_ns=3,
         captured=Namespace(frame_id=frame_id, frame_bgr=object()),
         points=[{"label": "target_center", "x": float(frame_id), "y": 0.0, "confidence": 1.0}],
     )
@@ -61,8 +67,18 @@ class ClosingInferencer:
 
 
 class OneFrameCapture:
-    def read_frame(self) -> object:
-        return SimpleNamespace(frame_id=1, frame_bgr=object())
+    def __init__(self) -> None:
+        self.frame_id = 0
+
+    def read_frame(self, timeout: float | None = None) -> object:
+        self.frame_id += 1
+        return SimpleNamespace(
+            camera_id="test-camera",
+            stream_generation=1,
+            frame_id=self.frame_id,
+            captured_at_monotonic_ns=time.monotonic_ns(),
+            frame_bgr=object(),
+        )
 
 
 class VisionProducerTest(unittest.TestCase):

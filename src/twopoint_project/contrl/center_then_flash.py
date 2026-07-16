@@ -193,18 +193,18 @@ WEBRTC_INDEX_HTML = """<!doctype html>
 
 def open_camera_capture(
     *,
-    camera_index: int,
     width: int | None,
     height: int | None,
     fps: int | None,
+    camera_index: int | None = None,
 ) -> object:
     from twopoint_project.vision.capture import CameraCapture
 
     return CameraCapture(
         camera_index=camera_index,
-        width=width,
-        height=height,
-        fps=fps,
+        width=width or 1280,
+        height=height or 720,
+        fps=fps or 30,
     )
 
 
@@ -586,7 +586,9 @@ class CenterRunMonitor:
             "providers": self.providers,
             "frame_id": captured.frame_id,
             "timestamp": captured.timestamp,
-            "age_ms": round((time.time() - captured.timestamp) * 1000.0, 1),
+            "stream_generation": getattr(captured, "stream_generation", 0),
+            "pts_ns": getattr(captured, "pts_ns", None),
+            "age_ms": round(captured_age_seconds(captured) * 1000.0, 1),
             "points": points,
             "valid": update.valid,
             "moved": update.moved,
@@ -631,6 +633,17 @@ class EscKeyStopper:
         return sys.stdin.read(1) == "\x1b"
 
 
+def captured_age_seconds(captured: Any, now_monotonic: float | None = None) -> float:
+    now = time.monotonic() if now_monotonic is None else now_monotonic
+    captured_ns = getattr(captured, "captured_at_monotonic_ns", None)
+    if captured_ns is not None:
+        return max(now - int(captured_ns) / 1_000_000_000.0, 0.0)
+    timestamp = getattr(captured, "timestamp", None)
+    if timestamp is not None:
+        return max(now - float(timestamp), 0.0)
+    return 0.0
+
+
 def center_target(
     *,
     vision: VisionProducer,
@@ -646,18 +659,16 @@ def center_target(
     deadline = time.monotonic() + timeout
     settled_frames = 0
     cached_frame: Any | None = None
-    cached_at: float | None = None
 
     while time.monotonic() < deadline:
         loop_started_at = time.monotonic()
         fresh = False
         vision_frame = vision.read_nowait_latest()
-        if vision_frame is None and cached_frame is not None and cached_at is not None:
-            if loop_started_at - cached_at <= stale_target_seconds:
+        if vision_frame is None and cached_frame is not None:
+            if captured_age_seconds(cached_frame.captured, loop_started_at) <= stale_target_seconds:
                 vision_frame = cached_frame
             else:
                 cached_frame = None
-                cached_at = None
 
         if vision_frame is None:
             sleep_for_loop_rate(loop_started_at, loop_hz)
@@ -666,15 +677,21 @@ def center_target(
         captured = vision_frame.captured
         points = vision_frame.points
         fresh = vision_frame is not cached_frame
+        source_age = captured_age_seconds(captured, loop_started_at)
+        if fresh and stale_target_seconds > 0 and source_age > stale_target_seconds:
+            print(
+                f"center: frame={captured.frame_id} stale source age={source_age * 1000.0:.1f}ms"
+            )
+            cached_frame = None
+            sleep_for_loop_rate(loop_started_at, loop_hz)
+            continue
         step_scale = 1.0 if fresh else stale_target_step_scale
         update = servo.update(gimbal, points, step_scale=step_scale)
         if fresh:
             if update.valid:
                 cached_frame = vision_frame
-                cached_at = loop_started_at
             else:
                 cached_frame = None
-                cached_at = None
         if on_frame is not None:
             on_frame(captured, points, update)
 
@@ -721,18 +738,16 @@ def track_target(
     on_frame: CenterFrameCallback | None = None,
 ) -> None:
     cached_frame: Any | None = None
-    cached_at: float | None = None
 
     while not stop_requested():
         loop_started_at = time.monotonic()
         fresh = False
         vision_frame = vision.read_nowait_latest()
-        if vision_frame is None and cached_frame is not None and cached_at is not None:
-            if loop_started_at - cached_at <= stale_target_seconds:
+        if vision_frame is None and cached_frame is not None:
+            if captured_age_seconds(cached_frame.captured, loop_started_at) <= stale_target_seconds:
                 vision_frame = cached_frame
             else:
                 cached_frame = None
-                cached_at = None
 
         if vision_frame is None:
             sleep_for_loop_rate(loop_started_at, loop_hz)
@@ -741,15 +756,21 @@ def track_target(
         captured = vision_frame.captured
         points = vision_frame.points
         fresh = vision_frame is not cached_frame
+        source_age = captured_age_seconds(captured, loop_started_at)
+        if fresh and stale_target_seconds > 0 and source_age > stale_target_seconds:
+            print(
+                f"track: frame={captured.frame_id} stale source age={source_age * 1000.0:.1f}ms"
+            )
+            cached_frame = None
+            sleep_for_loop_rate(loop_started_at, loop_hz)
+            continue
         step_scale = 1.0 if fresh else stale_target_step_scale
         update = servo.update(gimbal, points, step_scale=step_scale)
         if fresh:
             if update.valid:
                 cached_frame = vision_frame
-                cached_at = loop_started_at
             else:
                 cached_frame = None
-                cached_at = None
         if on_frame is not None:
             on_frame(captured, points, update)
 
@@ -818,10 +839,9 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
     with open_camera_capture(
-        camera_index=task_config.camera.index,
-        width=task_config.camera.width,
-        height=task_config.camera.height,
-        fps=task_config.camera.fps,
+        width=runtime_config.camera.width,
+        height=runtime_config.camera.height,
+        fps=runtime_config.camera.fps,
     ) as capture, open_serial_gimbal(
         port=task_config.f32c.port,
         baudrate=task_config.f32c.baudrate,
@@ -915,10 +935,9 @@ def run_track(
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
     with open_camera_capture(
-        camera_index=task_config.camera.index,
-        width=task_config.camera.width,
-        height=task_config.camera.height,
-        fps=task_config.camera.fps,
+        width=runtime_config.camera.width,
+        height=runtime_config.camera.height,
+        fps=runtime_config.camera.fps,
     ) as capture, open_serial_gimbal(
         port=task_config.f32c.port,
         baudrate=task_config.f32c.baudrate,

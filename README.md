@@ -1,5 +1,25 @@
 # A733 NPU pose backend
 
+## Camera capture
+
+The realtime path resolves exactly one stable
+`/dev/v4l/by-id/*-video-index0` camera and captures through GStreamer. Camera
+dimensions and FPS come from `.env` rather than task JSON:
+
+```dotenv
+TWOPOINT_CAMERA_WIDTH=1280
+TWOPOINT_CAMERA_HEIGHT=720
+TWOPOINT_CAMERA_FPS=30
+```
+
+The capture pipeline requests MJPEG explicitly, drops stale compressed and
+decoded frames, and publishes only the newest copied BGR frame. Use the same
+path without starting the motor or laser through:
+
+```bash
+poetry run python tests/test_cam.py --duration 10
+```
+
 The third vision backend runs `model-bin/pose/best_pcq_a733.nb` through the
 Cubie A7A VIPLite v2.0 runtime. Build its native bridge on the A7A with:
 

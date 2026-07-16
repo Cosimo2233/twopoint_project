@@ -1,11 +1,5 @@
 {
   "mode": "center_flash_track",
-  "camera": {
-    "index": 0,
-    "width": 640,
-    "height": 480,
-    "fps": 30
-  },
   "f32c": {
     "port": "/dev/ttyAS4",
     "baudrate": 115200,

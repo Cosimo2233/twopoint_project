@@ -389,7 +389,7 @@ class DemoResources:
             "camera_error": self.camera_error,
             "frame_id": captured.frame_id,
             "timestamp": captured.timestamp,
-            "age_ms": round((time.time() - captured.timestamp) * 1000.0, 1),
+            "age_ms": round((time.monotonic() - captured.timestamp) * 1000.0, 1),
             "points": vision_frame.points,
             "valid": update.valid,
             "moved": update.moved,

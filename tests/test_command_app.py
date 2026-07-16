@@ -23,6 +23,9 @@ class CommandAppTest(unittest.TestCase):
             return True
 
         env = {
+            "TWOPOINT_CAMERA_WIDTH": "1280",
+            "TWOPOINT_CAMERA_HEIGHT": "720",
+            "TWOPOINT_CAMERA_FPS": "30",
             "TWOPOINT_VISION_BACKEND": "traditional",
             "TWOPOINT_ONNX_PATH": "model-bin/test.onnx",
             "TWOPOINT_NPU_MODEL_PATH": "model-bin/pose/test.nb",
@@ -42,6 +45,9 @@ class CommandAppTest(unittest.TestCase):
         task_config = seen["task_config"]
         runtime_config = seen["runtime_config"]
         self.assertEqual(getattr(task_config, "mode"), "center_then_flash")
+        self.assertEqual(runtime_config.camera.width, 1280)
+        self.assertEqual(runtime_config.camera.height, 720)
+        self.assertEqual(runtime_config.camera.fps, 30)
         self.assertEqual(runtime_config.vision.backend, "traditional")
         self.assertEqual(runtime_config.vision.onnx_path, "model-bin/test.onnx")
         self.assertEqual(runtime_config.vision.npu_model_path, "model-bin/pose/test.nb")

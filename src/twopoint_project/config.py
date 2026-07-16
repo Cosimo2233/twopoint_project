@@ -21,6 +21,11 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_X_ID,
     DEFAULT_Y_ID,
 )
+from twopoint_project.vision.capture import (
+    DEFAULT_CAMERA_FPS,
+    DEFAULT_CAMERA_HEIGHT,
+    DEFAULT_CAMERA_WIDTH,
+)
 from twopoint_project.vision.inferencer import (
     DEFAULT_IMG_SIZE,
     DEFAULT_NPU_LIBRARY_PATH,
@@ -87,25 +92,20 @@ class WebRtcConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     config_path: Path
+    camera: CameraConfig
     vision: VisionConfig
     webrtc: WebRtcConfig
 
 
 @dataclass(frozen=True)
 class CameraConfig:
-    index: int = 0
-    width: int = 640
-    height: int = 480
-    fps: int = 30
+    width: int = DEFAULT_CAMERA_WIDTH
+    height: int = DEFAULT_CAMERA_HEIGHT
+    fps: int = DEFAULT_CAMERA_FPS
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CameraConfig:
-        return cls(
-            index=int(data.get("index", cls.index)),
-            width=int(data.get("width", cls.width)),
-            height=int(data.get("height", cls.height)),
-            fps=int(data.get("fps", cls.fps)),
-        )
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0 or self.fps <= 0:
+            raise ValueError("camera width, height, and fps must be greater than 0")
 
 
 @dataclass(frozen=True)
@@ -289,7 +289,6 @@ class UnsupportedTaskConfig:
 @dataclass(frozen=True)
 class CenterThenFlashConfig:
     mode: str
-    camera: CameraConfig
     f32c: F32CConfig
     center: CenterConfig
     laser: LaserConfig
@@ -303,7 +302,6 @@ class CenterThenFlashConfig:
             raise ValueError(f"center_then_flash config must declare mode='center_then_flash', got {mode!r}")
         return cls(
             mode=mode,
-            camera=CameraConfig.from_dict(section(data, "camera")),
             f32c=F32CConfig.from_dict(section(data, "f32c")),
             center=CenterConfig.from_dict(section(data, "center")),
             laser=LaserConfig.from_dict(section(data, "laser")),
@@ -315,7 +313,6 @@ class CenterThenFlashConfig:
 @dataclass(frozen=True)
 class CenterFlashTrackConfig:
     mode: str
-    camera: CameraConfig
     f32c: F32CConfig
     center: CenterConfig
     laser: LaserConfig
@@ -329,7 +326,6 @@ class CenterFlashTrackConfig:
             raise ValueError(f"center_flash_track config must declare mode='center_flash_track', got {mode!r}")
         return cls(
             mode=mode,
-            camera=CameraConfig.from_dict(section(data, "camera")),
             f32c=F32CConfig.from_dict(section(data, "f32c")),
             center=CenterConfig.from_dict(section(data, "center")),
             laser=LaserConfig.from_dict(section(data, "laser")),
@@ -345,6 +341,11 @@ def runtime_config_from_env(config_path: Path | None = None) -> RuntimeConfig:
     path = config_path or Path(env_str("TWOPOINT_CONFIG", str(DEFAULT_CONFIG_PATH)))
     return RuntimeConfig(
         config_path=path,
+        camera=CameraConfig(
+            width=env_int("TWOPOINT_CAMERA_WIDTH", DEFAULT_CAMERA_WIDTH),
+            height=env_int("TWOPOINT_CAMERA_HEIGHT", DEFAULT_CAMERA_HEIGHT),
+            fps=env_int("TWOPOINT_CAMERA_FPS", DEFAULT_CAMERA_FPS),
+        ),
         vision=VisionConfig(
             backend=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND),
             onnx_path=env_str("TWOPOINT_ONNX_PATH", DEFAULT_ONNX_PATH),

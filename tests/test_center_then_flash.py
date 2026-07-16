@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import time
 import unittest
 from unittest.mock import patch
 
@@ -34,7 +35,7 @@ class FakeCapture:
     def __exit__(self, *args: object) -> None:
         self.closed = True
 
-    def read_frame(self) -> object:
+    def read_frame(self, timeout: float | None = None) -> object:
         return self.frame
 
 
@@ -116,7 +117,6 @@ class FakeVideoRecorder:
 def make_task_config() -> CenterThenFlashConfig:
     return CenterThenFlashConfig(
         mode="center_then_flash",
-        camera=CameraConfig(index=0, width=640, height=480, fps=30),
         f32c=F32CConfig(
             port="/dev/null",
             baudrate=115200,
@@ -149,6 +149,7 @@ def make_task_config() -> CenterThenFlashConfig:
 def make_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         config_path=Path("unused.json"),
+        camera=CameraConfig(width=1280, height=720, fps=30),
         vision=VisionConfig(
             backend="traditional",
             onnx_path="model-bin/runs/twopoint/best.onnx",
@@ -161,7 +162,6 @@ def make_runtime_config() -> RuntimeConfig:
 def make_track_config() -> CenterFlashTrackConfig:
     return CenterFlashTrackConfig(
         mode="center_flash_track",
-        camera=CameraConfig(index=0, width=640, height=480, fps=30),
         f32c=F32CConfig(
             port="/dev/null",
             baudrate=115200,
@@ -195,7 +195,6 @@ def make_constant_laser_track_config() -> CenterFlashTrackConfig:
     task_config = make_track_config()
     return CenterFlashTrackConfig(
         mode=task_config.mode,
-        camera=task_config.camera,
         f32c=task_config.f32c,
         center=task_config.center,
         laser=LaserConfig(hold_seconds=0, on_during_run=True),
@@ -376,6 +375,30 @@ class CenterThenFlashTest(unittest.TestCase):
         self.assertAlmostEqual(fake_gimbal.moves[0][1], 0.5)
         self.assertAlmostEqual(fake_gimbal.moves[1][0], 0.5)
         self.assertAlmostEqual(fake_gimbal.moves[1][1], 0.25)
+
+    def test_track_target_rejects_result_older_than_stale_window(self) -> None:
+        fake_gimbal = FakeGimbal()
+        vision = FakeVisionFrames([
+            SimpleNamespace(
+                captured=SimpleNamespace(
+                    frame_id=1,
+                    captured_at_monotonic_ns=time.monotonic_ns() - 1_000_000_000,
+                ),
+                points=[{"label": "target_center", "x": 0.6, "y": 0.45, "confidence": 1.0}],
+            )
+        ])
+
+        center_then_flash.track_target(
+            vision=vision,
+            gimbal=fake_gimbal,
+            servo=center_then_flash.TargetCenterServo(conf_threshold=0.5),
+            loop_hz=0,
+            stale_target_seconds=0.1,
+            stale_target_step_scale=0.5,
+            stop_requested=StopAfterCalls(2),
+        )
+
+        self.assertEqual(fake_gimbal.moves, [])
 
 
 if __name__ == "__main__":

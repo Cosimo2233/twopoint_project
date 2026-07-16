@@ -4,6 +4,7 @@ import ctypes
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -48,6 +49,13 @@ class PoseDetection:
     box: tuple[float, float, float, float]
     score: float
     keypoints: tuple[PoseKeypoint, ...]
+
+
+@dataclass(frozen=True)
+class PoseTiming:
+    preprocess_ns: int
+    inference_ns: int
+    postprocess_ns: int
 
 
 def validate_unit_interval(value: float, name: str) -> float:
@@ -136,6 +144,14 @@ def target_center_prediction(
         return {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
 
     restored = restore_detection(detections[0], meta)
+    return target_center_from_restored_detection(restored, meta, keypoint_index)
+
+
+def target_center_from_restored_detection(
+    restored: PoseDetection,
+    meta: LetterboxMeta,
+    keypoint_index: int,
+) -> PointPrediction:
     keypoint = restored.keypoints[keypoint_index]
     width_scale = max(meta.original_width - 1, 1)
     height_scale = max(meta.original_height - 1, 1)
@@ -175,6 +191,7 @@ class NpuPoseInferencer:
         self._context: int | None = None
         self._owner_thread: int | None = None
         self._driver_version: int | None = None
+        self.last_timing: PoseTiming | None = None
 
     @property
     def providers(self) -> list[str]:
@@ -239,9 +256,12 @@ class NpuPoseInferencer:
         self,
         frame_bgr: np.ndarray,
     ) -> tuple[list[PoseDetection], LetterboxMeta]:
+        preprocess_started = time.monotonic_ns()
         tensor, meta = letterbox_rgb_uint8(frame_bgr, self.img_size)
+        preprocess_finished = time.monotonic_ns()
         library, context = self._ensure_context()
         native_output = (NativePoseDetection * MAX_DETECTIONS)()
+        inference_started = time.monotonic_ns()
         count = library.pose_infer_rgb640(
             context,
             tensor.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
@@ -249,9 +269,11 @@ class NpuPoseInferencer:
             native_output,
             MAX_DETECTIONS,
         )
+        inference_finished = time.monotonic_ns()
         if count < 0:
             raise RuntimeError(f"A733 NPU inference failed: {self._native_error(context)}")
 
+        postprocess_started = time.monotonic_ns()
         detections: list[PoseDetection] = []
         for index in range(count):
             native = native_output[index]
@@ -275,11 +297,41 @@ class NpuPoseInferencer:
                     keypoints=keypoints,
                 )
             )
+        self.last_timing = PoseTiming(
+            preprocess_ns=preprocess_finished - preprocess_started,
+            inference_ns=inference_finished - inference_started,
+            postprocess_ns=time.monotonic_ns() - postprocess_started,
+        )
         return detections, meta
 
     def predict(self, frame_bgr: np.ndarray) -> list[PointPrediction]:
+        points, _ = self.predict_with_details(frame_bgr)
+        return points
+
+    def predict_with_details(
+        self,
+        frame_bgr: np.ndarray,
+    ) -> tuple[list[PointPrediction], tuple[PoseDetection, ...]]:
         detections, meta = self.predict_detections(frame_bgr)
-        return [target_center_prediction(detections, meta, self.target_keypoint_index)]
+        restore_started = time.monotonic_ns()
+        restored = tuple(restore_detection(detection, meta) for detection in detections)
+        if not restored:
+            point = {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
+        else:
+            point = target_center_from_restored_detection(
+                restored[0],
+                meta,
+                self.target_keypoint_index,
+            )
+        if self.last_timing is not None:
+            self.last_timing = PoseTiming(
+                preprocess_ns=self.last_timing.preprocess_ns,
+                inference_ns=self.last_timing.inference_ns,
+                postprocess_ns=self.last_timing.postprocess_ns
+                + time.monotonic_ns()
+                - restore_started,
+            )
+        return [point], restored
 
     def close(self) -> None:
         if self._context is None:
