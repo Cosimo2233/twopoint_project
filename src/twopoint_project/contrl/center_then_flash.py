@@ -796,7 +796,12 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
     inferencer = build_vision_inferencer(
         backend=runtime_config.vision.backend,
         onnx_path=runtime_config.vision.onnx_path,
+        npu_model_path=runtime_config.vision.npu_model_path,
+        npu_library_path=runtime_config.vision.npu_library_path,
         img_size=runtime_config.vision.img_size,
+        npu_score_threshold=runtime_config.vision.npu_score_threshold,
+        npu_nms_threshold=runtime_config.vision.npu_nms_threshold,
+        npu_target_keypoint_index=runtime_config.vision.npu_target_keypoint_index,
     )
     servo = TargetCenterServo(
         center_x=task_config.center.target_x,
@@ -888,7 +893,12 @@ def run_track(
     inferencer = build_vision_inferencer(
         backend=runtime_config.vision.backend,
         onnx_path=runtime_config.vision.onnx_path,
+        npu_model_path=runtime_config.vision.npu_model_path,
+        npu_library_path=runtime_config.vision.npu_library_path,
         img_size=runtime_config.vision.img_size,
+        npu_score_threshold=runtime_config.vision.npu_score_threshold,
+        npu_nms_threshold=runtime_config.vision.npu_nms_threshold,
+        npu_target_keypoint_index=runtime_config.vision.npu_target_keypoint_index,
     )
     servo = TargetCenterServo(
         center_x=task_config.center.target_x,

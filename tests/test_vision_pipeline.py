@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from types import SimpleNamespace
+import time
 import unittest
 
-from twopoint_project.vision.pipeline import LatestVisionQueue, VisionFrame
+from twopoint_project.vision.pipeline import LatestVisionQueue, VisionFrame, VisionProducer
 
 
 def make_frame(frame_id: int) -> VisionFrame:
@@ -41,6 +43,41 @@ class LatestVisionQueueTest(unittest.TestCase):
         assert latest is not None
         self.assertEqual(latest.captured.frame_id, 2)
         self.assertIsNone(queue.read_nowait_latest())
+
+
+class ClosingInferencer:
+    def __init__(self) -> None:
+        self.closed = False
+
+    @property
+    def providers(self) -> list[str]:
+        return ["closing-fake"]
+
+    def predict(self, frame_bgr: object) -> list[dict[str, float | str]]:
+        return [{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class OneFrameCapture:
+    def read_frame(self) -> object:
+        return SimpleNamespace(frame_id=1, frame_bgr=object())
+
+
+class VisionProducerTest(unittest.TestCase):
+    def test_stop_closes_inferencer_on_producer_thread(self) -> None:
+        inferencer = ClosingInferencer()
+        producer = VisionProducer(capture=OneFrameCapture(), inferencer=inferencer)
+
+        producer.start()
+        producer.read_latest(timeout=1.0)
+        producer.stop()
+        deadline = time.monotonic() + 1.0
+        while not inferencer.closed and time.monotonic() < deadline:
+            time.sleep(0.001)
+
+        self.assertTrue(inferencer.closed)
 
 
 if __name__ == "__main__":

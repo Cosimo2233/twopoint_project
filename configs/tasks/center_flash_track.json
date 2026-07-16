@@ -23,9 +23,9 @@
     "target_y": 0.5,
     "pid": {
       "x": {
-        "kp": -10.0,
+        "kp": 10.0,
         "ki": 0.1,
-        "kd": -1.0,
+        "kd": 1.0,
         "integral_limit": 0.2,
         "output_limit_deg": 30.0,
         "integral_separation_threshold": 0.04,
@@ -37,9 +37,9 @@
         "fuzzy_kp_far_scale": 1.25
       },
       "y": {
-        "kp": 10.0,
-        "ki": 0.1,
-        "kd": 1.0,
+        "kp": -10.0,
+        "ki": -0.1,
+        "kd": -3.0,
         "integral_limit": 0.2,
         "output_limit_deg": 30.0,
         "integral_separation_threshold": 0.04,

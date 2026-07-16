@@ -126,3 +126,12 @@ class VisionProducer:
         except BaseException as exc:
             self._error = exc
             self._stop_event.set()
+        finally:
+            close = getattr(self.inferencer, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException as exc:
+                    if self._error is None:
+                        self._error = exc
+                    self._stop_event.set()

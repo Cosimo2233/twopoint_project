@@ -21,7 +21,16 @@ from twopoint_project.f32c.gimbal import (
     DEFAULT_X_ID,
     DEFAULT_Y_ID,
 )
-from twopoint_project.vision.inferencer import DEFAULT_IMG_SIZE, DEFAULT_ONNX_PATH, DEFAULT_VISION_BACKEND
+from twopoint_project.vision.inferencer import (
+    DEFAULT_IMG_SIZE,
+    DEFAULT_NPU_LIBRARY_PATH,
+    DEFAULT_NPU_MODEL_PATH,
+    DEFAULT_NPU_NMS_THRESHOLD,
+    DEFAULT_NPU_SCORE_THRESHOLD,
+    DEFAULT_NPU_TARGET_KEYPOINT_INDEX,
+    DEFAULT_ONNX_PATH,
+    DEFAULT_VISION_BACKEND,
+)
 
 
 DEFAULT_CONFIG_PATH = Path("configs/tasks/center_then_flash.json")
@@ -37,6 +46,11 @@ def env_bool(name: str, default: bool) -> bool:
 def env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     return default if value is None or value == "" else int(value)
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    return default if value is None or value == "" else float(value)
 
 
 def env_str(name: str, default: str) -> str:
@@ -55,7 +69,12 @@ def section(data: dict[str, Any], name: str) -> dict[str, Any]:
 class VisionConfig:
     backend: str = DEFAULT_VISION_BACKEND
     onnx_path: str = DEFAULT_ONNX_PATH
+    npu_model_path: str = DEFAULT_NPU_MODEL_PATH
+    npu_library_path: str = DEFAULT_NPU_LIBRARY_PATH
     img_size: int = DEFAULT_IMG_SIZE
+    npu_score_threshold: float = DEFAULT_NPU_SCORE_THRESHOLD
+    npu_nms_threshold: float = DEFAULT_NPU_NMS_THRESHOLD
+    npu_target_keypoint_index: int = DEFAULT_NPU_TARGET_KEYPOINT_INDEX
 
 
 @dataclass(frozen=True)
@@ -329,7 +348,21 @@ def runtime_config_from_env(config_path: Path | None = None) -> RuntimeConfig:
         vision=VisionConfig(
             backend=env_str("TWOPOINT_VISION_BACKEND", DEFAULT_VISION_BACKEND),
             onnx_path=env_str("TWOPOINT_ONNX_PATH", DEFAULT_ONNX_PATH),
+            npu_model_path=env_str("TWOPOINT_NPU_MODEL_PATH", DEFAULT_NPU_MODEL_PATH),
+            npu_library_path=env_str("TWOPOINT_NPU_LIBRARY_PATH", DEFAULT_NPU_LIBRARY_PATH),
             img_size=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE),
+            npu_score_threshold=env_float(
+                "TWOPOINT_NPU_SCORE_THRESHOLD",
+                DEFAULT_NPU_SCORE_THRESHOLD,
+            ),
+            npu_nms_threshold=env_float(
+                "TWOPOINT_NPU_NMS_THRESHOLD",
+                DEFAULT_NPU_NMS_THRESHOLD,
+            ),
+            npu_target_keypoint_index=env_int(
+                "TWOPOINT_NPU_TARGET_KEYPOINT_INDEX",
+                DEFAULT_NPU_TARGET_KEYPOINT_INDEX,
+            ),
         ),
         webrtc=WebRtcConfig(
             enabled=env_bool("TWOPOINT_WEBRTC_ENABLED", False),

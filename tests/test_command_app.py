@@ -25,7 +25,12 @@ class CommandAppTest(unittest.TestCase):
         env = {
             "TWOPOINT_VISION_BACKEND": "traditional",
             "TWOPOINT_ONNX_PATH": "model-bin/test.onnx",
+            "TWOPOINT_NPU_MODEL_PATH": "model-bin/pose/test.nb",
+            "TWOPOINT_NPU_LIBRARY_PATH": "build/test/libpose.so",
             "TWOPOINT_IMG_SIZE": "320",
+            "TWOPOINT_NPU_SCORE_THRESHOLD": "0.25",
+            "TWOPOINT_NPU_NMS_THRESHOLD": "0.55",
+            "TWOPOINT_NPU_TARGET_KEYPOINT_INDEX": "3",
             "TWOPOINT_WEBRTC_ENABLED": "false",
             "TWOPOINT_WEBRTC_HOST": "127.0.0.1",
             "TWOPOINT_WEBRTC_PORT": "18080",
@@ -39,7 +44,12 @@ class CommandAppTest(unittest.TestCase):
         self.assertEqual(getattr(task_config, "mode"), "center_then_flash")
         self.assertEqual(runtime_config.vision.backend, "traditional")
         self.assertEqual(runtime_config.vision.onnx_path, "model-bin/test.onnx")
+        self.assertEqual(runtime_config.vision.npu_model_path, "model-bin/pose/test.nb")
+        self.assertEqual(runtime_config.vision.npu_library_path, "build/test/libpose.so")
         self.assertEqual(runtime_config.vision.img_size, 320)
+        self.assertEqual(runtime_config.vision.npu_score_threshold, 0.25)
+        self.assertEqual(runtime_config.vision.npu_nms_threshold, 0.55)
+        self.assertEqual(runtime_config.vision.npu_target_keypoint_index, 3)
         self.assertFalse(runtime_config.webrtc.enabled)
         self.assertEqual(runtime_config.webrtc.host, "127.0.0.1")
         self.assertEqual(runtime_config.webrtc.port, 18080)

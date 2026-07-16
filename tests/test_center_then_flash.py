@@ -238,7 +238,12 @@ class CenterThenFlashTest(unittest.TestCase):
         build_vision_inferencer.assert_called_once_with(
             backend="traditional",
             onnx_path="model-bin/runs/twopoint/best.onnx",
+            npu_model_path="model-bin/pose/best_pcq_a733.nb",
+            npu_library_path="build/npu/libyolo11_pose_npu.so",
             img_size=640,
+            npu_score_threshold=0.4,
+            npu_nms_threshold=0.45,
+            npu_target_keypoint_index=0,
         )
         open_serial_gimbal.assert_called_once()
         self.assertNotIn("init_zero", open_serial_gimbal.call_args.kwargs)
