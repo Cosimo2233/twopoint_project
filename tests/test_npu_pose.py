@@ -12,6 +12,7 @@ from twopoint_project.vision3.infer_npu_pose import (
     NpuPoseInferencer,
     PoseDetection,
     PoseKeypoint,
+    PoseTiming,
     letterbox_rgb_uint8,
     restore_detection,
     target_center_prediction,
@@ -88,6 +89,63 @@ class NpuPoseTest(unittest.TestCase):
         self.assertIsInstance(inferencer, NpuPoseInferencer)
         self.assertEqual(inferencer.target_keypoint_index, 3)
         self.assertEqual(inferencer.score_threshold, 0.25)
+
+    def test_details_bind_center_and_distance_to_first_detection(self) -> None:
+        meta = LetterboxMeta(
+            scale=1.0,
+            left=0,
+            top=0,
+            original_width=1920,
+            original_height=1080,
+        )
+        rectangle_width = 400.0
+        rectangle_height = 37142.0 / rectangle_width
+
+        def detection(center_x: float) -> PoseDetection:
+            left = center_x - rectangle_width / 2.0
+            right = center_x + rectangle_width / 2.0
+            top = 540.0 - rectangle_height / 2.0
+            bottom = 540.0 + rectangle_height / 2.0
+            keypoints = (
+                PoseKeypoint(center_x, 540.0, 0.95),
+                PoseKeypoint(left, top, 0.9),
+                PoseKeypoint(right, top, 0.9),
+                PoseKeypoint(right, bottom, 0.9),
+                PoseKeypoint(left, bottom, 0.9),
+            )
+            return PoseDetection((left, top, right, bottom), 0.85, keypoints)
+
+        first = detection(480.0)
+        second = detection(1440.0)
+        inferencer = NpuPoseInferencer(Path("unused.nb"), Path("unused.so"))
+        inferencer.last_timing = PoseTiming(1, 2, 3)
+        inferencer.predict_detections = lambda frame: ([first, second], meta)  # type: ignore[method-assign]
+
+        details = inferencer.predict_with_details(np.zeros((1080, 1920, 3), dtype=np.uint8))
+
+        self.assertAlmostEqual(details.points[0]["x"], 480.0 / 1919.0)
+        self.assertEqual(details.detections, (first, second))
+        self.assertIsNotNone(details.target_area_normalized)
+        self.assertIsNotNone(details.target_distance_cm)
+        assert details.target_distance_cm is not None
+        self.assertAlmostEqual(details.target_distance_cm, 150.0, places=3)
+        self.assertIsNotNone(inferencer.last_timing)
+        assert inferencer.last_timing is not None
+        self.assertGreater(inferencer.last_timing.postprocess_ns, 3)
+
+    def test_details_without_detection_have_no_distance(self) -> None:
+        meta = LetterboxMeta(1.0, 0, 0, 1920, 1080)
+        inferencer = NpuPoseInferencer(Path("unused.nb"), Path("unused.so"))
+        inferencer.predict_detections = lambda frame: ([], meta)  # type: ignore[method-assign]
+
+        details = inferencer.predict_with_details(np.zeros((1080, 1920, 3), dtype=np.uint8))
+
+        self.assertEqual(
+            details.points,
+            [{"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}],
+        )
+        self.assertIsNone(details.target_area_normalized)
+        self.assertIsNone(details.target_distance_cm)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from argparse import Namespace
 from types import SimpleNamespace
+import threading
 import time
 import unittest
 
 from twopoint_project.vision.pipeline import LatestVisionQueue, VisionFrame, VisionProducer
+from twopoint_project.vision.inferencer import VisionInferenceDetails
 
 
 def make_frame(frame_id: int) -> VisionFrame:
@@ -66,6 +68,42 @@ class ClosingInferencer:
         self.closed = True
 
 
+class DetailedInferencer(ClosingInferencer):
+    def predict_with_details(self, frame_bgr: object) -> VisionInferenceDetails:
+        return VisionInferenceDetails(
+            points=[{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}],
+            detections=("target",),
+            target_area_normalized=0.02,
+            target_distance_cm=142.0,
+        )
+
+
+class LegacyDetailedInferencer(ClosingInferencer):
+    def predict_with_details(
+        self,
+        frame_bgr: object,
+    ) -> tuple[list[dict[str, float | str]], tuple[str, ...]]:
+        return self.predict(frame_bgr), ("legacy-target",)
+
+
+class SequencedDetailedInferencer(ClosingInferencer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_count = 0
+        self.release_second = threading.Event()
+
+    def predict_with_details(self, frame_bgr: object) -> VisionInferenceDetails:
+        self.call_count += 1
+        if self.call_count == 1:
+            return VisionInferenceDetails(
+                points=self.predict(frame_bgr),
+                target_area_normalized=0.02,
+                target_distance_cm=142.0,
+            )
+        self.release_second.wait(timeout=1.0)
+        return VisionInferenceDetails(points=self.predict(frame_bgr))
+
+
 class OneFrameCapture:
     def __init__(self) -> None:
         self.frame_id = 0
@@ -94,6 +132,47 @@ class VisionProducerTest(unittest.TestCase):
             time.sleep(0.001)
 
         self.assertTrue(inferencer.closed)
+
+    def test_producer_publishes_distance_with_same_frame(self) -> None:
+        producer = VisionProducer(capture=OneFrameCapture(), inferencer=DetailedInferencer())
+
+        producer.start()
+        result = producer.read_latest(timeout=1.0)
+        producer.stop()
+
+        self.assertEqual(result.source_frame_id, result.captured.frame_id)
+        self.assertEqual(result.detections, ("target",))
+        self.assertEqual(result.target_area_normalized, 0.02)
+        self.assertEqual(result.target_distance_cm, 142.0)
+
+    def test_legacy_details_default_distance_to_none(self) -> None:
+        producer = VisionProducer(
+            capture=OneFrameCapture(),
+            inferencer=LegacyDetailedInferencer(),
+        )
+
+        producer.start()
+        result = producer.read_latest(timeout=1.0)
+        producer.stop()
+
+        self.assertEqual(result.detections, ("legacy-target",))
+        self.assertIsNone(result.target_area_normalized)
+        self.assertIsNone(result.target_distance_cm)
+
+    def test_invalid_frame_does_not_reuse_previous_distance(self) -> None:
+        inferencer = SequencedDetailedInferencer()
+        producer = VisionProducer(capture=OneFrameCapture(), inferencer=inferencer)
+
+        producer.start()
+        valid = producer.read_latest(timeout=1.0)
+        inferencer.release_second.set()
+        invalid = producer.read_latest(timeout=1.0)
+        producer.stop()
+
+        self.assertEqual(valid.target_distance_cm, 142.0)
+        self.assertGreater(invalid.source_frame_id, valid.source_frame_id)
+        self.assertIsNone(invalid.target_area_normalized)
+        self.assertIsNone(invalid.target_distance_cm)
 
 
 if __name__ == "__main__":

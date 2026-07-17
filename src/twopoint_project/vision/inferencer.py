@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
@@ -19,6 +20,16 @@ class PointPrediction(TypedDict):
     x: float
     y: float
     confidence: float
+
+
+@dataclass(frozen=True)
+class VisionInferenceDetails:
+    """One frame's inference outputs and optional target measurements."""
+
+    points: list[PointPrediction]
+    detections: tuple[Any, ...] = ()
+    target_area_normalized: float | None = None
+    target_distance_cm: float | None = None
 
 
 class VisionInferencer(Protocol):

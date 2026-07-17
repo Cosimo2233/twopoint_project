@@ -5,7 +5,11 @@ import threading
 import time
 from typing import Any, Protocol
 
-from twopoint_project.vision.inferencer import PointPrediction, VisionInferencer
+from twopoint_project.vision.inferencer import (
+    PointPrediction,
+    VisionInferenceDetails,
+    VisionInferencer,
+)
 
 
 class FrameCapture(Protocol):
@@ -28,6 +32,8 @@ class VisionResult:
     preprocessing_duration_ns: int | None = None
     model_inference_duration_ns: int | None = None
     postprocessing_duration_ns: int | None = None
+    target_area_normalized: float | None = None
+    target_distance_cm: float | None = None
 
     @property
     def inference_duration_ns(self) -> int:
@@ -191,10 +197,21 @@ class VisionProducer:
                 inference_started = time.monotonic_ns()
                 predict_with_details = getattr(self.inferencer, "predict_with_details", None)
                 if callable(predict_with_details):
-                    points, detections = predict_with_details(captured.frame_bgr)
+                    details = predict_with_details(captured.frame_bgr)
+                    if isinstance(details, VisionInferenceDetails):
+                        points = details.points
+                        detections = details.detections
+                        target_area_normalized = details.target_area_normalized
+                        target_distance_cm = details.target_distance_cm
+                    else:
+                        points, detections = details
+                        target_area_normalized = None
+                        target_distance_cm = None
                 else:
                     points = self.inferencer.predict(captured.frame_bgr)
                     detections = ()
+                    target_area_normalized = None
+                    target_distance_cm = None
                 inference_finished = time.monotonic_ns()
                 timing = getattr(self.inferencer, "last_timing", None)
                 skipped = 0
@@ -220,6 +237,8 @@ class VisionProducer:
                         preprocessing_duration_ns=getattr(timing, "preprocess_ns", None),
                         model_inference_duration_ns=getattr(timing, "inference_ns", None),
                         postprocessing_duration_ns=getattr(timing, "postprocess_ns", None),
+                        target_area_normalized=target_area_normalized,
+                        target_distance_cm=target_distance_cm,
                     )
                 )
         except BaseException as exc:

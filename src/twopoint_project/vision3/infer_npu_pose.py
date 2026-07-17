@@ -9,7 +9,8 @@ import time
 import cv2
 import numpy as np
 
-from twopoint_project.vision.inferencer import PointPrediction
+from twopoint_project.vision.inferencer import PointPrediction, VisionInferenceDetails
+from twopoint_project.vision3.area_distance import estimate_area_distance
 
 
 INPUT_SIZE = 640
@@ -305,16 +306,16 @@ class NpuPoseInferencer:
         return detections, meta
 
     def predict(self, frame_bgr: np.ndarray) -> list[PointPrediction]:
-        points, _ = self.predict_with_details(frame_bgr)
-        return points
+        return self.predict_with_details(frame_bgr).points
 
     def predict_with_details(
         self,
         frame_bgr: np.ndarray,
-    ) -> tuple[list[PointPrediction], tuple[PoseDetection, ...]]:
+    ) -> VisionInferenceDetails:
         detections, meta = self.predict_detections(frame_bgr)
         restore_started = time.monotonic_ns()
         restored = tuple(restore_detection(detection, meta) for detection in detections)
+        area_distance = None
         if not restored:
             point = {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
         else:
@@ -322,6 +323,14 @@ class NpuPoseInferencer:
                 restored[0],
                 meta,
                 self.target_keypoint_index,
+            )
+            corners = restored[0].keypoints[1:5]
+            area_distance = estimate_area_distance(
+                [(corner.x, corner.y) for corner in corners],
+                frame_width=meta.original_width,
+                frame_height=meta.original_height,
+                confidences=[corner.confidence for corner in corners],
+                confidence_threshold=self.score_threshold,
             )
         if self.last_timing is not None:
             self.last_timing = PoseTiming(
@@ -331,7 +340,16 @@ class NpuPoseInferencer:
                 + time.monotonic_ns()
                 - restore_started,
             )
-        return [point], restored
+        return VisionInferenceDetails(
+            points=[point],
+            detections=restored,
+            target_area_normalized=(
+                None if area_distance is None else area_distance.area_normalized
+            ),
+            target_distance_cm=(
+                None if area_distance is None else area_distance.distance_cm
+            ),
+        )
 
     def close(self) -> None:
         if self._context is None:
