@@ -24,6 +24,7 @@ from twopoint_project.contrl.target_center_servo import (
     TargetCenterServo,
     sleep_for_loop_rate,
 )
+from twopoint_project.contrl.laser_alignment_servo import LaserAlignmentServo
 from twopoint_project.f32c.gimbal import open_serial_gimbal
 from twopoint_project.flash import open_laser_pointer
 from twopoint_project.vision.inferencer import build_vision_inferencer
@@ -248,6 +249,8 @@ def draw_aim_frame(
         "laser_point": (0, 0, 255),
     }
     confidence_lines: list[tuple[str, tuple[int, int, int]]] = []
+    valid_laser_pixel: tuple[int, int] | None = None
+    valid_target_pixel: tuple[int, int] | None = None
     for point in points:
         label = str(point["label"])
         color = colors.get(label, (0, 200, 255))
@@ -259,7 +262,21 @@ def draw_aim_frame(
         cv2.circle(image, (x, y), radius, color, thickness, cv2.LINE_AA)
         cv2.circle(image, (x, y), radius + 3, (255, 255, 255), 1, cv2.LINE_AA)
         if label == "target_center" and valid:
-            cv2.arrowedLine(image, center, (x, y), color, 2, cv2.LINE_AA, tipLength=0.12)
+            valid_target_pixel = (x, y)
+        elif label == "laser_point" and valid:
+            valid_laser_pixel = (x, y)
+
+    if valid_target_pixel is not None:
+        arrow_start = valid_laser_pixel or center
+        cv2.arrowedLine(
+            image,
+            arrow_start,
+            valid_target_pixel,
+            (0, 220, 0),
+            2,
+            cv2.LINE_AA,
+            tipLength=0.12,
+        )
 
     for index, (text, color) in enumerate(confidence_lines):
         draw_text(image, text, (14, 54 + index * 22), color)
@@ -795,6 +812,108 @@ def track_target(
     print("track: stop requested")
 
 
+class GimbalFeedbackReader:
+    """Read encoder angles, falling back to commanded angles on feedback errors."""
+
+    def __init__(self, gimbal: Any, timeout: float) -> None:
+        self.gimbal = gimbal
+        self.timeout = timeout
+        self.using_fallback = False
+        self.recovered_this_read = False
+
+    def initialize(self) -> Any:
+        angles = self.read()
+        if angles.feedback_valid:
+            self.gimbal.sync_commanded_angles(angles)
+        return angles
+
+    def read(self) -> Any:
+        self.recovered_this_read = False
+        try:
+            angles = self.gimbal.read_angles(timeout=self.timeout)
+        except (OSError, TimeoutError, ValueError) as exc:
+            if not self.using_fallback:
+                print(f"gimbal feedback unavailable; using commanded-angle fallback: {exc}")
+            self.using_fallback = True
+            return self.gimbal.commanded_angles()
+        if self.using_fallback:
+            print("gimbal feedback recovered; resuming encoder closed loop")
+            self.recovered_this_read = True
+        self.using_fallback = False
+        return angles
+
+
+def run_laser_alignment_loop(
+    *,
+    vision: VisionProducer,
+    gimbal: Any,
+    feedback: GimbalFeedbackReader,
+    servo: LaserAlignmentServo,
+    loop_hz: float,
+    stop_requested: StopCallback,
+    deadline: float | None = None,
+    stable_frames: int | None = None,
+    on_frame: CenterFrameCallback | None = None,
+    phase: str,
+) -> bool:
+    settled_frames = 0
+    while not stop_requested() and (deadline is None or time.monotonic() < deadline):
+        loop_started_at = time.monotonic()
+        angles = feedback.read()
+        if feedback.recovered_this_read:
+            # Commanded-angle fallback and encoder feedback may use different
+            # origins. Wait for a fresh visual target before moving again.
+            servo.clear_target()
+        servo.record_angles(angles)
+
+        vision_frame = vision.read_nowait_latest()
+        if vision_frame is not None:
+            aim_update = servo.accept_vision(
+                vision_frame,
+                angles,
+                now_monotonic_ns=time.monotonic_ns(),
+            )
+            if on_frame is not None:
+                on_frame(vision_frame.captured, vision_frame.points, aim_update)
+            if aim_update.valid and aim_update.step is not None:
+                target = servo.target
+                assert target is not None
+                print(
+                    f"{phase}: frame={vision_frame.source_frame_id} "
+                    f"visual_err=({target.visual_error_x:+.4f},{target.visual_error_y:+.4f}) "
+                    f"correction=({target.x_correction_deg:+.3f},{target.y_correction_deg:+.3f})deg "
+                    f"angle_target=({target.desired_x_deg:+.3f},{target.desired_y_deg:+.3f})deg "
+                    f"feedback=({angles.x_deg:+.3f},{angles.y_deg:+.3f})deg "
+                    f"source={'encoder' if angles.feedback_valid else 'command-fallback'} "
+                    f"distance={vision_frame.target_distance_cm:.1f}cm"
+                )
+            else:
+                print(
+                    f"{phase}: frame={vision_frame.source_frame_id} "
+                    f"vision target invalid: {aim_update.reason}"
+                )
+
+            if aim_update.valid and aim_update.settled:
+                settled_frames += 1
+            else:
+                settled_frames = 0
+            if stable_frames is not None and settled_frames >= stable_frames:
+                print(f"{phase}: visually settled for {settled_frames} fresh frame(s)")
+                return True
+
+        motor_update = servo.compute_motor_update(angles, now=time.monotonic())
+        if motor_update.x_command_deg is not None and motor_update.y_command_deg is not None:
+            gimbal.move_to(motor_update.x_command_deg, motor_update.y_command_deg)
+
+        sleep_for_loop_rate(loop_started_at, loop_hz)
+
+    if deadline is not None and time.monotonic() >= deadline:
+        print(f"{phase}: timeout")
+    else:
+        print(f"{phase}: stop requested")
+    return False
+
+
 def sleep_with_stop(seconds: float, stop_requested: StopCallback) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -920,17 +1039,10 @@ def run_track(
         npu_nms_threshold=runtime_config.vision.npu_nms_threshold,
         npu_target_keypoint_index=runtime_config.vision.npu_target_keypoint_index,
     )
-    servo = TargetCenterServo(
-        center_x=task_config.center.target_x,
-        center_y=task_config.center.target_y,
-        x_gain_deg=task_config.center.x_gain_deg,
-        y_gain_deg=task_config.center.y_gain_deg,
-        max_step_deg=task_config.center.max_step_deg,
-        deadband=task_config.center.deadband,
-        conf_threshold=task_config.center.conf_threshold,
-        x_pid=task_config.center.pid.x if task_config.center.pid is not None else None,
-        y_pid=task_config.center.pid.y if task_config.center.pid is not None else None,
-        feedforward=task_config.center.feedforward,
+    servo = LaserAlignmentServo(
+        config=task_config.closed_loop,
+        confidence_threshold=task_config.center.conf_threshold,
+        visual_deadband=task_config.center.deadband,
     )
     monitor_output_path = default_monitor_output_path(task_config.mode)
 
@@ -967,6 +1079,10 @@ def run_track(
             print(f"task: backend={runtime_config.vision.backend}")
             print(f"task: providers={inferencer.providers}")
             print(f"task: center_timeout={task_config.center.timeout:.2f}s")
+            print(
+                f"task: motor_loop={task_config.closed_loop.motor_loop_hz:.1f}Hz "
+                f"feedback_timeout={task_config.closed_loop.feedback_timeout * 1000.0:.1f}ms"
+            )
             if task_config.laser.on_during_run:
                 print("task: laser_on_during_run=true")
             else:
@@ -975,22 +1091,29 @@ def run_track(
 
             laser.off()
             gimbal.initialize()
+            feedback = GimbalFeedbackReader(
+                gimbal,
+                timeout=task_config.closed_loop.feedback_timeout,
+            )
+            initial_angles = feedback.initialize()
+            servo.record_angles(initial_angles)
 
             try:
                 if task_config.laser.on_during_run:
                     print("laser: on")
                     laser.on()
 
-                centered = center_target(
+                centered = run_laser_alignment_loop(
                     vision=vision,
                     gimbal=gimbal,
+                    feedback=feedback,
                     servo=servo,
-                    loop_hz=task_config.center.loop_hz,
-                    timeout=task_config.center.timeout,
+                    loop_hz=task_config.closed_loop.motor_loop_hz,
+                    deadline=time.monotonic() + task_config.center.timeout,
                     stable_frames=task_config.center.stable_frames,
-                    stale_target_seconds=task_config.center.stale_target_seconds,
-                    stale_target_step_scale=task_config.center.stale_target_step_scale,
+                    stop_requested=monitor.stop_requested,
                     on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                    phase="center",
                 )
 
                 stopper_context = EscKeyStopper() if stop_requested is None else None
@@ -1015,15 +1138,15 @@ def run_track(
                             return centered
                     else:
                         print("laser: skipped because centering did not settle")
-                    track_target(
+                    run_laser_alignment_loop(
                         vision=vision,
                         gimbal=gimbal,
+                        feedback=feedback,
                         servo=servo,
-                        loop_hz=task_config.center.loop_hz,
-                        stale_target_seconds=task_config.center.stale_target_seconds,
-                        stale_target_step_scale=task_config.center.stale_target_step_scale,
+                        loop_hz=task_config.closed_loop.motor_loop_hz,
                         stop_requested=should_stop,
                         on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                        phase="track",
                     )
                     return centered
 
@@ -1043,15 +1166,15 @@ def run_track(
                             return centered
                     else:
                         print("laser: skipped because centering did not settle")
-                    track_target(
+                    run_laser_alignment_loop(
                         vision=vision,
                         gimbal=gimbal,
+                        feedback=feedback,
                         servo=servo,
-                        loop_hz=task_config.center.loop_hz,
-                        stale_target_seconds=task_config.center.stale_target_seconds,
-                        stale_target_step_scale=task_config.center.stale_target_step_scale,
+                        loop_hz=task_config.closed_loop.motor_loop_hz,
                         stop_requested=should_stop,
                         on_frame=monitor.on_frame if runtime_config.webrtc.enabled else None,
+                        phase="track",
                     )
                 return centered
             except KeyboardInterrupt:

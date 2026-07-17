@@ -68,9 +68,10 @@ class CommandAppTest(unittest.TestCase):
         self.assertFalse(task_config.behavior.exit_after_fire)
         self.assertTrue(task_config.laser.on_during_run)
         self.assertTrue(task_config.recording.save_raw_video)
-        self.assertIsNotNone(task_config.center.pid)
-        self.assertGreater(task_config.center.pid.x.output_limit_deg, 0)
-        self.assertGreater(task_config.center.pid.y.output_limit_deg, 0)
+        self.assertEqual(task_config.closed_loop.motor_loop_hz, 100.0)
+        self.assertEqual(task_config.closed_loop.feedback_timeout, 0.003)
+        self.assertGreater(task_config.closed_loop.x_pid.output_limit_deg, 0)
+        self.assertGreater(task_config.closed_loop.y_pid.output_limit_deg, 0)
 
 
 if __name__ == "__main__":

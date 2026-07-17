@@ -22,6 +22,9 @@ from twopoint_project.config import (
     WebRtcConfig,
 )
 from twopoint_project.contrl import center_then_flash
+from twopoint_project.f32c.gimbal import GimbalAngles
+from twopoint_project.vision.inferencer import VisionInferenceDetails
+from twopoint_project.vision3.laser_area_mapping import predict_laser_point_from_normalized_area
 
 
 class FakeCapture:
@@ -44,6 +47,8 @@ class FakeGimbal:
         self.initialized = False
         self.disabled = False
         self.moves: list[tuple[float, float]] = []
+        self.x_angle = 0.0
+        self.y_angle = 0.0
 
     def __enter__(self) -> FakeGimbal:
         return self
@@ -56,6 +61,26 @@ class FakeGimbal:
 
     def move_by(self, x_delta_deg: float, y_delta_deg: float) -> None:
         self.moves.append((x_delta_deg, y_delta_deg))
+
+    def move_to(self, x_angle_deg: float, y_angle_deg: float) -> None:
+        self.x_angle = x_angle_deg
+        self.y_angle = y_angle_deg
+        self.moves.append((x_angle_deg, y_angle_deg))
+
+    def read_angles(self, timeout: float = 0.01) -> GimbalAngles:
+        return GimbalAngles(self.x_angle, self.y_angle, time.monotonic_ns())
+
+    def commanded_angles(self) -> GimbalAngles:
+        return GimbalAngles(
+            self.x_angle,
+            self.y_angle,
+            time.monotonic_ns(),
+            feedback_valid=False,
+        )
+
+    def sync_commanded_angles(self, angles: GimbalAngles) -> None:
+        self.x_angle = angles.x_deg
+        self.y_angle = angles.y_deg
 
     def disable(self) -> None:
         self.disabled = True
@@ -85,6 +110,30 @@ class FakeInferencer:
 
     def predict(self, frame_bgr: np.ndarray) -> list[dict[str, float | str]]:
         return [{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}]
+
+
+class FakeDistanceInferencer(FakeInferencer):
+    def predict_with_details(self, frame_bgr: np.ndarray) -> VisionInferenceDetails:
+        height, width = frame_bgr.shape[:2]
+        area = 0.02
+        laser = predict_laser_point_from_normalized_area(
+            area,
+            frame_width=width,
+            frame_height=height,
+        )
+        assert laser is not None
+        return VisionInferenceDetails(
+            points=[
+                {
+                    "label": "target_center",
+                    "x": laser.x,
+                    "y": laser.y,
+                    "confidence": 1.0,
+                }
+            ],
+            target_area_normalized=area,
+            target_distance_cm=142.0,
+        )
 
 
 class FakeVisionFrames:
@@ -268,7 +317,7 @@ class CenterThenFlashTest(unittest.TestCase):
         ), patch.object(
             center_then_flash,
             "build_vision_inferencer",
-            return_value=FakeInferencer(),
+            return_value=FakeDistanceInferencer(),
         ):
             result = center_then_flash.run_track(make_track_config(), make_runtime_config(), stop_requested)
 
@@ -295,7 +344,7 @@ class CenterThenFlashTest(unittest.TestCase):
         ), patch.object(
             center_then_flash,
             "build_vision_inferencer",
-            return_value=FakeInferencer(),
+            return_value=FakeDistanceInferencer(),
         ):
             result = center_then_flash.run_track(
                 make_constant_laser_track_config(),

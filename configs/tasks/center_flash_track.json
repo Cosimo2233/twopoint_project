@@ -13,51 +13,35 @@
   },
   "center": {
     "conf_threshold": 0.0,
-    "target_x": 0.5,
-    "target_y": 0.5,
-    "pid": {
-      "x": {
-        "kp": 10.0,
-        "ki": 0.1,
-        "kd": 1.0,
-        "integral_limit": 0.5,
-        "output_limit_deg":10.0,
-        "integral_separation_threshold": 0.04,
-        "derivative_separation_threshold": 0.12,
-        "fuzzy_enabled": true,
-        "fuzzy_error_low": 0.02,
-        "fuzzy_error_high": 0.20,
-        "fuzzy_kp_near_scale": 0.75,
-        "fuzzy_kp_far_scale": 1.25
-      },
-      "y": {
-        "kp": -10.0,
-        "ki": -0.1,
-        "kd": -1.0,
-        "integral_limit": 1,
-        "output_limit_deg":10.0,
-        "integral_separation_threshold": 0.04,
-        "derivative_separation_threshold": 0.12,
-        "fuzzy_enabled": true,
-        "fuzzy_error_low": 0.02,
-        "fuzzy_error_high": 0.20,
-        "fuzzy_kp_near_scale": 0.75,
-        "fuzzy_kp_far_scale": 1.25
-      }
-    },
-    "feedforward": {
-      "enabled": true,
-      "lead_time": 0.12,
-      "max_prediction_error": 0.06,
-      "max_velocity": 1.2,
-      "velocity_alpha": 0.6
-    },
     "deadband": 0.006,
     "loop_hz": 15.0,
-    "stale_target_seconds": 0.3,
-    "stale_target_step_scale": 0.0,
     "timeout": 100.0,
     "stable_frames": 3
+  },
+  "closed_loop": {
+    "motor_loop_hz": 30.0,
+    "feedback_timeout": 0.01,
+    "max_vision_age_seconds": 0.3,
+    "angle_deadband_deg": 0.1,
+    "x_angle_gain_deg": 10.0,
+    "y_angle_gain_deg": -10.0,
+    "max_visual_correction_deg": 10.0,
+    "pid": {
+      "x": {
+        "kp": 0.8,
+        "ki": 0.0,
+        "kd": 0.02,
+        "integral_limit": 0.5,
+        "output_limit_deg": 2.0
+      },
+      "y": {
+        "kp": 0.8,
+        "ki": 0.0,
+        "kd": 0.02,
+        "integral_limit": 0.5,
+        "output_limit_deg": 2.0
+      }
+    }
   },
   "laser": {
     "hold_seconds": 5.0,
