@@ -6,6 +6,8 @@ import threading
 import time
 import unittest
 
+import numpy as np
+
 from twopoint_project.vision.pipeline import LatestVisionQueue, VisionFrame, VisionProducer
 from twopoint_project.vision.inferencer import VisionInferenceDetails
 
@@ -119,6 +121,17 @@ class OneFrameCapture:
         )
 
 
+class ImageFrameCapture(OneFrameCapture):
+    def __init__(self) -> None:
+        super().__init__()
+        self.frame_bgr = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    def read_frame(self, timeout: float | None = None) -> object:
+        captured = super().read_frame(timeout=timeout)
+        captured.frame_bgr = self.frame_bgr
+        return captured
+
+
 class VisionProducerTest(unittest.TestCase):
     def test_stop_closes_inferencer_on_producer_thread(self) -> None:
         inferencer = ClosingInferencer()
@@ -134,7 +147,7 @@ class VisionProducerTest(unittest.TestCase):
         self.assertTrue(inferencer.closed)
 
     def test_producer_publishes_distance_with_same_frame(self) -> None:
-        producer = VisionProducer(capture=OneFrameCapture(), inferencer=DetailedInferencer())
+        producer = VisionProducer(capture=ImageFrameCapture(), inferencer=DetailedInferencer())
 
         producer.start()
         result = producer.read_latest(timeout=1.0)
@@ -144,6 +157,20 @@ class VisionProducerTest(unittest.TestCase):
         self.assertEqual(result.detections, ("target",))
         self.assertEqual(result.target_area_normalized, 0.02)
         self.assertEqual(result.target_distance_cm, 142.0)
+        self.assertIsNotNone(result.laser_area_prediction)
+        self.assertEqual(
+            [point["label"] for point in result.points],
+            ["target_center", "laser_point"],
+        )
+        assert result.laser_area_prediction is not None
+        self.assertAlmostEqual(
+            result.points[1]["x"],
+            result.laser_area_prediction.x,
+        )
+        self.assertAlmostEqual(
+            result.points[1]["y"],
+            result.laser_area_prediction.y,
+        )
 
     def test_legacy_details_default_distance_to_none(self) -> None:
         producer = VisionProducer(
@@ -161,7 +188,7 @@ class VisionProducerTest(unittest.TestCase):
 
     def test_invalid_frame_does_not_reuse_previous_distance(self) -> None:
         inferencer = SequencedDetailedInferencer()
-        producer = VisionProducer(capture=OneFrameCapture(), inferencer=inferencer)
+        producer = VisionProducer(capture=ImageFrameCapture(), inferencer=inferencer)
 
         producer.start()
         valid = producer.read_latest(timeout=1.0)
@@ -170,9 +197,15 @@ class VisionProducerTest(unittest.TestCase):
         producer.stop()
 
         self.assertEqual(valid.target_distance_cm, 142.0)
+        self.assertIsNotNone(valid.laser_area_prediction)
         self.assertGreater(invalid.source_frame_id, valid.source_frame_id)
         self.assertIsNone(invalid.target_area_normalized)
         self.assertIsNone(invalid.target_distance_cm)
+        self.assertIsNone(invalid.laser_area_prediction)
+        self.assertEqual(
+            [point["label"] for point in invalid.points],
+            ["target_center"],
+        )
 
 
 if __name__ == "__main__":

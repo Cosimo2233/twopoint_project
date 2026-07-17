@@ -10,6 +10,11 @@ from twopoint_project.vision.inferencer import (
     VisionInferenceDetails,
     VisionInferencer,
 )
+from twopoint_project.vision3.laser_area_mapping import (
+    LASER_POINT_LABEL,
+    LaserAreaPrediction,
+    predict_laser_point_from_normalized_area,
+)
 
 
 class FrameCapture(Protocol):
@@ -34,6 +39,7 @@ class VisionResult:
     postprocessing_duration_ns: int | None = None
     target_area_normalized: float | None = None
     target_distance_cm: float | None = None
+    laser_area_prediction: LaserAreaPrediction | None = None
 
     @property
     def inference_duration_ns(self) -> int:
@@ -212,6 +218,16 @@ class VisionProducer:
                     detections = ()
                     target_area_normalized = None
                     target_distance_cm = None
+                points = list(points)
+                laser_area_prediction = self._predict_laser_point(
+                    frame_bgr=captured.frame_bgr,
+                    points=points,
+                    target_area_normalized=target_area_normalized,
+                )
+                if laser_area_prediction is not None and not any(
+                    point["label"] == LASER_POINT_LABEL for point in points
+                ):
+                    points.append(laser_area_prediction.as_point_prediction())
                 inference_finished = time.monotonic_ns()
                 timing = getattr(self.inferencer, "last_timing", None)
                 skipped = 0
@@ -239,6 +255,7 @@ class VisionProducer:
                         postprocessing_duration_ns=getattr(timing, "postprocess_ns", None),
                         target_area_normalized=target_area_normalized,
                         target_distance_cm=target_distance_cm,
+                        laser_area_prediction=laser_area_prediction,
                     )
                 )
         except BaseException as exc:
@@ -253,3 +270,32 @@ class VisionProducer:
                     if self._error is None:
                         self._error = exc
                     self._stop_event.set()
+
+    @staticmethod
+    def _predict_laser_point(
+        *,
+        frame_bgr: Any,
+        points: list[PointPrediction],
+        target_area_normalized: float | None,
+    ) -> LaserAreaPrediction | None:
+        if target_area_normalized is None:
+            return None
+        shape = getattr(frame_bgr, "shape", None)
+        if shape is None or len(shape) < 2:
+            return None
+        frame_height = int(shape[0])
+        frame_width = int(shape[1])
+        target_confidence = max(
+            (
+                float(point["confidence"])
+                for point in points
+                if point["label"] == "target_center"
+            ),
+            default=0.0,
+        )
+        return predict_laser_point_from_normalized_area(
+            target_area_normalized,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            confidence=target_confidence,
+        )
