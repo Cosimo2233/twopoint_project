@@ -50,8 +50,10 @@ keypoints becomes the shared `target_center` prediction. On the current
 `best_pcq_a733.nb`, the A7A smoke test confirmed that keypoint 0 is the target
 center and keypoints 1-4 are the four target corners.
 
-For a single-image hardware check:
+For a video hardware check, the script reads the NPU model settings from `.env`
+and writes an annotated MP4:
 
 ```bash
-poetry run python tests/npu_pose_demo.py path/to/image.jpg
+poetry run python tests/npu_pose_demo.py path/to/input.mp4 \
+  --output outputs/npu_pose_demo.mp4
 ```
