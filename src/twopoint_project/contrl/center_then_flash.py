@@ -1012,6 +1012,7 @@ def run(task_config: CenterThenFlashConfig, runtime_config: RuntimeConfig) -> bo
     ) as gimbal, VisionProducer(
         capture=capture,
         inferencer=inferencer,
+        target_filter_config=task_config.center.target_filter,
     ) as vision, open_laser_pointer(initial_on=False) as laser:
         with CenterRunMonitor(
             enabled=runtime_config.webrtc.enabled,
@@ -1101,6 +1102,7 @@ def run_track(
     ) as gimbal, VisionProducer(
         capture=capture,
         inferencer=inferencer,
+        target_filter_config=task_config.center.target_filter,
     ) as vision, open_laser_pointer(initial_on=False) as laser:
         with CenterRunMonitor(
             enabled=runtime_config.webrtc.enabled,

@@ -36,6 +36,7 @@ from twopoint_project.vision.inferencer import (
     DEFAULT_ONNX_PATH,
     DEFAULT_VISION_BACKEND,
 )
+from twopoint_project.vision.target_filter import TargetCenterFilterConfig
 
 
 DEFAULT_CONFIG_PATH = Path("configs/tasks/center_then_flash.json")
@@ -182,6 +183,15 @@ def feedforward_from_dict(data: dict[str, Any]) -> FeedForwardConfig:
     )
 
 
+def target_filter_from_dict(data: dict[str, Any]) -> TargetCenterFilterConfig:
+    return TargetCenterFilterConfig(
+        enabled=bool(data.get("enabled", False)),
+        ema_alpha=float(data.get("ema_alpha", 0.35)),
+        max_jump=float(data.get("max_jump", 0.08)),
+        jump_confirm_frames=int(data.get("jump_confirm_frames", 2)),
+    )
+
+
 @dataclass(frozen=True)
 class CenterConfig:
     conf_threshold: float = 0.5
@@ -198,6 +208,7 @@ class CenterConfig:
     stable_frames: int = 3
     pid: PIDConfig | None = None
     feedforward: FeedForwardConfig = FeedForwardConfig()
+    target_filter: TargetCenterFilterConfig = TargetCenterFilterConfig()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterConfig:
@@ -219,6 +230,7 @@ class CenterConfig:
             raise ValueError("center.stale_target_step_scale must be between 0 and 1")
         pid_data = section(data, "pid") if "pid" in data else {}
         feedforward_data = section(data, "feedforward") if "feedforward" in data else {}
+        target_filter_data = section(data, "target_filter") if "target_filter" in data else {}
         return cls(
             conf_threshold=conf_threshold,
             target_x=float(data.get("target_x", cls.target_x)),
@@ -239,6 +251,7 @@ class CenterConfig:
                 max_step_deg=max_step_deg,
             ),
             feedforward=feedforward_from_dict(feedforward_data),
+            target_filter=target_filter_from_dict(target_filter_data),
         )
 
 

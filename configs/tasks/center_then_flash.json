@@ -34,7 +34,13 @@
     "deadband": 0.006,
     "loop_hz": 15.0,
     "timeout": 100.0,
-    "stable_frames": 3
+    "stable_frames": 3,
+    "target_filter": {
+      "enabled": true,
+      "ema_alpha": 0.35,
+      "max_jump": 0.08,
+      "jump_confirm_frames": 2
+    }
   },
   "laser": {
     "hold_seconds": 5.0

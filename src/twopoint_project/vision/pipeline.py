@@ -16,6 +16,10 @@ from twopoint_project.vision3.laser_area_mapping import (
     LaserAreaPrediction,
     predict_laser_point_from_normalized_area,
 )
+from twopoint_project.vision.target_filter import (
+    TargetCenterFilter,
+    TargetCenterFilterConfig,
+)
 
 
 class FrameCapture(Protocol):
@@ -131,11 +135,15 @@ class VisionProducer:
         inferencer: VisionInferencer,
         queue: LatestVisionState | None = None,
         join_timeout: float = 2.0,
+        target_filter_config: TargetCenterFilterConfig | None = None,
     ) -> None:
         self.capture = capture
         self.inferencer = inferencer
         self.queue = queue or LatestVisionState()
         self.join_timeout = join_timeout
+        self.target_filter = TargetCenterFilter(
+            target_filter_config or TargetCenterFilterConfig()
+        )
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None
@@ -223,7 +231,7 @@ class VisionProducer:
                     target_area_normalized = None
                     target_distance_cm = None
                     target_corners_normalized = ()
-                points = list(points)
+                points = self.target_filter.filter_points(points)
                 laser_area_prediction = self._predict_laser_point(
                     frame_bgr=captured.frame_bgr,
                     points=points,
