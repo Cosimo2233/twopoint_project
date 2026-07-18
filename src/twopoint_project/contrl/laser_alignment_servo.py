@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import atan2, degrees, hypot, isfinite
+from math import hypot
 from typing import Sequence
-
-import cv2
-import numpy as np
 
 from twopoint_project.config import TrackClosedLoopConfig
 from twopoint_project.contrl.target_center_servo import (
@@ -35,9 +32,6 @@ class AngularTarget:
     captured_at_monotonic_ns: int
     visual_error_x: float
     visual_error_y: float
-    target_plane_error_x_cm: float
-    target_plane_error_y_cm: float
-    target_distance_cm: float
     x_correction_deg: float
     y_correction_deg: float
     desired_x_deg: float
@@ -106,51 +100,6 @@ def select_point(
     return max(candidates, key=lambda point: point["confidence"], default=None)
 
 
-def target_plane_error_cm(
-    *,
-    target_x: float,
-    target_y: float,
-    laser_x: float,
-    laser_y: float,
-    corners_normalized: Sequence[tuple[float, float]],
-    target_width_cm: float,
-    target_height_cm: float,
-) -> tuple[float, float] | None:
-    """Map normalized image points onto the physical target plane."""
-    if len(corners_normalized) != 4:
-        return None
-    source = np.asarray(corners_normalized, dtype=np.float32)
-    if source.shape != (4, 2) or not np.isfinite(source).all():
-        return None
-    if abs(float(cv2.contourArea(source))) <= 1e-9:
-        return None
-    destination = np.asarray(
-        [
-            (0.0, 0.0),
-            (target_width_cm, 0.0),
-            (target_width_cm, target_height_cm),
-            (0.0, target_height_cm),
-        ],
-        dtype=np.float32,
-    )
-    transform = cv2.getPerspectiveTransform(source, destination)
-    if not np.isfinite(transform).all():
-        return None
-    image_points = np.asarray(
-        [[(target_x, target_y)], [(laser_x, laser_y)]],
-        dtype=np.float32,
-    )
-    plane_points = cv2.perspectiveTransform(image_points, transform)
-    if plane_points.shape != (2, 1, 2) or not np.isfinite(plane_points).all():
-        return None
-    target_plane = plane_points[0, 0]
-    laser_plane = plane_points[1, 0]
-    return (
-        float(target_plane[0] - laser_plane[0]),
-        float(target_plane[1] - laser_plane[1]),
-    )
-
-
 class LaserAlignmentServo:
     """Turn fresh target/laser observations into an encoder-feedback angle target."""
 
@@ -206,32 +155,16 @@ class LaserAlignmentServo:
         if laser_point is None or vision.target_distance_cm is None:
             return AimUpdate(False, False, False, "laser_or_distance_unavailable", None, None)
 
-        distance_cm = float(vision.target_distance_cm)
-        if not isfinite(distance_cm) or distance_cm <= 0.0:
-            return AimUpdate(False, False, False, "distance_invalid", None, None)
-
         error_x = float(target_point["x"] - laser_point["x"])
         error_y = float(target_point["y"] - laser_point["y"])
-        plane_error = target_plane_error_cm(
-            target_x=float(target_point["x"]),
-            target_y=float(target_point["y"]),
-            laser_x=float(laser_point["x"]),
-            laser_y=float(laser_point["y"]),
-            corners_normalized=vision.target_corners_normalized,
-            target_width_cm=self.config.target_width_cm,
-            target_height_cm=self.config.target_height_cm,
-        )
-        if plane_error is None:
-            return AimUpdate(False, False, False, "target_geometry_unavailable", None, None)
-        plane_error_x_cm, plane_error_y_cm = plane_error
         limit = abs(self.config.max_visual_correction_deg)
         correction_x = clamp(
-            degrees(atan2(plane_error_x_cm, distance_cm)) * self.config.x_angle_scale,
+            error_x * self.config.x_angle_gain_deg,
             -limit,
             limit,
         )
         correction_y = clamp(
-            degrees(atan2(plane_error_y_cm, distance_cm)) * self.config.y_angle_scale,
+            error_y * self.config.y_angle_gain_deg,
             -limit,
             limit,
         )
@@ -241,9 +174,6 @@ class LaserAlignmentServo:
             captured_at_monotonic_ns=vision.captured_at_monotonic_ns,
             visual_error_x=error_x,
             visual_error_y=error_y,
-            target_plane_error_x_cm=plane_error_x_cm,
-            target_plane_error_y_cm=plane_error_y_cm,
-            target_distance_cm=distance_cm,
             x_correction_deg=correction_x,
             y_correction_deg=correction_y,
             desired_x_deg=capture_angles.x_deg + correction_x,

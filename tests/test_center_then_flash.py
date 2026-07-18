@@ -133,12 +133,6 @@ class FakeDistanceInferencer(FakeInferencer):
             ],
             target_area_normalized=area,
             target_distance_cm=142.0,
-            target_corners_normalized=(
-                (0.2, 0.2),
-                (0.8, 0.2),
-                (0.8, 0.8),
-                (0.2, 0.8),
-            ),
         )
 
 

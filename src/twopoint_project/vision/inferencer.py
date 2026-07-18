@@ -30,7 +30,6 @@ class VisionInferenceDetails:
     detections: tuple[Any, ...] = ()
     target_area_normalized: float | None = None
     target_distance_cm: float | None = None
-    target_corners_normalized: tuple[tuple[float, float], ...] = ()
 
 
 class VisionInferencer(Protocol):

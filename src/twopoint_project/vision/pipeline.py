@@ -39,7 +39,6 @@ class VisionResult:
     postprocessing_duration_ns: int | None = None
     target_area_normalized: float | None = None
     target_distance_cm: float | None = None
-    target_corners_normalized: tuple[tuple[float, float], ...] = ()
     laser_area_prediction: LaserAreaPrediction | None = None
 
     @property
@@ -210,18 +209,15 @@ class VisionProducer:
                         detections = details.detections
                         target_area_normalized = details.target_area_normalized
                         target_distance_cm = details.target_distance_cm
-                        target_corners_normalized = details.target_corners_normalized
                     else:
                         points, detections = details
                         target_area_normalized = None
                         target_distance_cm = None
-                        target_corners_normalized = ()
                 else:
                     points = self.inferencer.predict(captured.frame_bgr)
                     detections = ()
                     target_area_normalized = None
                     target_distance_cm = None
-                    target_corners_normalized = ()
                 points = list(points)
                 laser_area_prediction = self._predict_laser_point(
                     frame_bgr=captured.frame_bgr,
@@ -259,7 +255,6 @@ class VisionProducer:
                         postprocessing_duration_ns=getattr(timing, "postprocess_ns", None),
                         target_area_normalized=target_area_normalized,
                         target_distance_cm=target_distance_cm,
-                        target_corners_normalized=target_corners_normalized,
                         laser_area_prediction=laser_area_prediction,
                     )
                 )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from math import isfinite
 import os
 from pathlib import Path
 from typing import Any
@@ -249,10 +248,8 @@ class TrackClosedLoopConfig:
     feedback_timeout: float = 0.003
     max_vision_age_seconds: float = 0.3
     angle_deadband_deg: float = 0.1
-    target_width_cm: float = 29.7
-    target_height_cm: float = 21.0
-    x_angle_scale: float = 1.0
-    y_angle_scale: float = -1.0
+    x_angle_gain_deg: float = 10.0
+    y_angle_gain_deg: float = -10.0
     max_visual_correction_deg: float = 10.0
     x_pid: PIDAxisGains = PIDAxisGains(
         kp=0.8,
@@ -280,10 +277,6 @@ class TrackClosedLoopConfig:
         max_visual_correction_deg = float(
             data.get("max_visual_correction_deg", cls.max_visual_correction_deg)
         )
-        target_width_cm = float(data.get("target_width_cm", cls.target_width_cm))
-        target_height_cm = float(data.get("target_height_cm", cls.target_height_cm))
-        x_angle_scale = float(data.get("x_angle_scale", cls.x_angle_scale))
-        y_angle_scale = float(data.get("y_angle_scale", cls.y_angle_scale))
         if motor_loop_hz <= 0:
             raise ValueError("closed_loop.motor_loop_hz must be greater than 0")
         if feedback_timeout <= 0:
@@ -294,14 +287,6 @@ class TrackClosedLoopConfig:
             raise ValueError("closed_loop.angle_deadband_deg must be non-negative")
         if max_visual_correction_deg <= 0:
             raise ValueError("closed_loop.max_visual_correction_deg must be greater than 0")
-        if not isfinite(target_width_cm) or target_width_cm <= 0:
-            raise ValueError("closed_loop.target_width_cm must be finite and greater than 0")
-        if not isfinite(target_height_cm) or target_height_cm <= 0:
-            raise ValueError("closed_loop.target_height_cm must be finite and greater than 0")
-        if not isfinite(x_angle_scale) or x_angle_scale == 0:
-            raise ValueError("closed_loop.x_angle_scale must be finite and non-zero")
-        if not isfinite(y_angle_scale) or y_angle_scale == 0:
-            raise ValueError("closed_loop.y_angle_scale must be finite and non-zero")
         pid_data = section(data, "pid") if "pid" in data else {}
         x_default = cls.x_pid
         y_default = cls.y_pid
@@ -322,10 +307,8 @@ class TrackClosedLoopConfig:
             feedback_timeout=feedback_timeout,
             max_vision_age_seconds=max_vision_age_seconds,
             angle_deadband_deg=angle_deadband_deg,
-            target_width_cm=target_width_cm,
-            target_height_cm=target_height_cm,
-            x_angle_scale=x_angle_scale,
-            y_angle_scale=y_angle_scale,
+            x_angle_gain_deg=float(data.get("x_angle_gain_deg", cls.x_angle_gain_deg)),
+            y_angle_gain_deg=float(data.get("y_angle_gain_deg", cls.y_angle_gain_deg)),
             max_visual_correction_deg=max_visual_correction_deg,
             x_pid=pid_axis_from_dict(
                 x_pid_data,

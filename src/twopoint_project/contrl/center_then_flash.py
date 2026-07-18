@@ -881,8 +881,6 @@ def run_laser_alignment_loop(
                 print(
                     f"{phase}: frame={vision_frame.source_frame_id} "
                     f"visual_err=({target.visual_error_x:+.4f},{target.visual_error_y:+.4f}) "
-                    f"plane_err=({target.target_plane_error_x_cm:+.2f},"
-                    f"{target.target_plane_error_y_cm:+.2f})cm "
                     f"correction=({target.x_correction_deg:+.3f},{target.y_correction_deg:+.3f})deg "
                     f"angle_target=({target.desired_x_deg:+.3f},{target.desired_y_deg:+.3f})deg "
                     f"feedback=({angles.x_deg:+.3f},{angles.y_deg:+.3f})deg "
