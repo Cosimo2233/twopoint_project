@@ -77,6 +77,12 @@ class DetailedInferencer(ClosingInferencer):
             detections=("target",),
             target_area_normalized=0.02,
             target_distance_cm=142.0,
+            target_corners_normalized=(
+                (0.2, 0.2),
+                (0.8, 0.2),
+                (0.8, 0.8),
+                (0.2, 0.8),
+            ),
         )
 
 
@@ -157,6 +163,10 @@ class VisionProducerTest(unittest.TestCase):
         self.assertEqual(result.detections, ("target",))
         self.assertEqual(result.target_area_normalized, 0.02)
         self.assertEqual(result.target_distance_cm, 142.0)
+        self.assertEqual(
+            result.target_corners_normalized,
+            ((0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)),
+        )
         self.assertIsNotNone(result.laser_area_prediction)
         self.assertEqual(
             [point["label"] for point in result.points],
@@ -185,6 +195,7 @@ class VisionProducerTest(unittest.TestCase):
         self.assertEqual(result.detections, ("legacy-target",))
         self.assertIsNone(result.target_area_normalized)
         self.assertIsNone(result.target_distance_cm)
+        self.assertEqual(result.target_corners_normalized, ())
 
     def test_invalid_frame_does_not_reuse_previous_distance(self) -> None:
         inferencer = SequencedDetailedInferencer()
@@ -201,6 +212,7 @@ class VisionProducerTest(unittest.TestCase):
         self.assertGreater(invalid.source_frame_id, valid.source_frame_id)
         self.assertIsNone(invalid.target_area_normalized)
         self.assertIsNone(invalid.target_distance_cm)
+        self.assertEqual(invalid.target_corners_normalized, ())
         self.assertIsNone(invalid.laser_area_prediction)
         self.assertEqual(
             [point["label"] for point in invalid.points],
