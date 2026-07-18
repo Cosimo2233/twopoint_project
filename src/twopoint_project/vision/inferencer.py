@@ -22,6 +22,9 @@ class PointPrediction(TypedDict):
     confidence: float
 
 
+TargetCorners = tuple[tuple[float, float], ...]
+
+
 @dataclass(frozen=True)
 class VisionInferenceDetails:
     """One frame's inference outputs and optional target measurements."""
@@ -30,6 +33,7 @@ class VisionInferenceDetails:
     detections: tuple[Any, ...] = ()
     target_area_normalized: float | None = None
     target_distance_cm: float | None = None
+    target_corners_normalized: TargetCorners = ()
 
 
 class VisionInferencer(Protocol):

@@ -392,6 +392,24 @@ class CenterThenFlashTest(unittest.TestCase):
         self.assertEqual(len(FakeVideoRecorder.instances[0].frames), 1)
         self.assertEqual(len(FakeVideoRecorder.instances[1].frames), 1)
 
+    def test_draw_aim_frame_uses_smaller_markers_and_draws_target_corners(self) -> None:
+        frame = np.zeros((101, 201, 3), dtype=np.uint8)
+        points = [
+            {"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0},
+            {"label": "laser_point", "x": 0.25, "y": 0.75, "confidence": 1.0},
+        ]
+        update = SimpleNamespace(step=None, reason="test")
+        corners = ((0.1, 0.2), (0.9, 0.2), (0.9, 0.8), (0.1, 0.8))
+
+        with patch.object(center_then_flash.cv2, "circle") as circle:
+            center_then_flash.draw_aim_frame(frame, points, update, 0.5, corners)
+
+        calls = [item.args[1:] for item in circle.call_args_list]
+        self.assertIn(((100, 50), 4, (0, 220, 0), -1, center_then_flash.cv2.LINE_AA), calls)
+        self.assertIn(((50, 75), 4, (0, 0, 255), -1, center_then_flash.cv2.LINE_AA), calls)
+        for corner in ((20, 20), (180, 20), (180, 80), (20, 80)):
+            self.assertIn((corner, 3, (255, 255, 0), -1, center_then_flash.cv2.LINE_AA), calls)
+
     def test_track_target_reuses_last_valid_frame_when_no_new_frame_is_available(self) -> None:
         fake_gimbal = FakeGimbal()
         vision = FakeVisionFrames([

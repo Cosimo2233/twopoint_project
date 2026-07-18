@@ -77,6 +77,7 @@ class DetailedInferencer(ClosingInferencer):
             detections=("target",),
             target_area_normalized=0.02,
             target_distance_cm=142.0,
+            target_corners_normalized=((0.1, 0.2), (0.9, 0.2), (0.9, 0.8), (0.1, 0.8)),
         )
 
 
@@ -157,6 +158,10 @@ class VisionProducerTest(unittest.TestCase):
         self.assertEqual(result.detections, ("target",))
         self.assertEqual(result.target_area_normalized, 0.02)
         self.assertEqual(result.target_distance_cm, 142.0)
+        self.assertEqual(
+            result.target_corners_normalized,
+            ((0.1, 0.2), (0.9, 0.2), (0.9, 0.8), (0.1, 0.8)),
+        )
         self.assertIsNotNone(result.laser_area_prediction)
         self.assertEqual(
             [point["label"] for point in result.points],

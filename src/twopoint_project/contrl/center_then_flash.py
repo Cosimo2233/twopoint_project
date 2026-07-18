@@ -27,11 +27,11 @@ from twopoint_project.contrl.target_center_servo import (
 from twopoint_project.contrl.laser_alignment_servo import LaserAlignmentServo
 from twopoint_project.f32c.gimbal import open_serial_gimbal
 from twopoint_project.flash import open_laser_pointer
-from twopoint_project.vision.inferencer import build_vision_inferencer
+from twopoint_project.vision.inferencer import TargetCorners, build_vision_inferencer
 from twopoint_project.vision.pipeline import VisionProducer
 
 
-CenterFrameCallback = Callable[[Any, list[PointPrediction], AimUpdate], None]
+CenterFrameCallback = Callable[[Any, list[PointPrediction], AimUpdate, TargetCorners], None]
 StopCallback = Callable[[], bool]
 DEFAULT_MONITOR_OUTPUT_DIR = Path("outputs")
 WEBRTC_INDEX_HTML = """<!doctype html>
@@ -234,6 +234,7 @@ def draw_aim_frame(
     points: list[PointPrediction],
     update: AimUpdate,
     conf_threshold: float,
+    target_corners_normalized: TargetCorners = (),
 ) -> Any:
     image = frame_bgr.copy()
     height, width = image.shape[:2]
@@ -257,14 +258,23 @@ def draw_aim_frame(
         x, y = normalized_to_pixel(point, width, height)
         valid = point["confidence"] >= conf_threshold
         confidence_lines.append((f"{label}: conf={point['confidence']:.2f}", color))
-        radius = 7 if valid else 4
+        radius = 4 if valid else 2
+        outline_radius = 5 if valid else 4
         thickness = -1 if valid else 1
         cv2.circle(image, (x, y), radius, color, thickness, cv2.LINE_AA)
-        cv2.circle(image, (x, y), radius + 3, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.circle(image, (x, y), outline_radius, (255, 255, 255), 1, cv2.LINE_AA)
         if label == "target_center" and valid:
             valid_target_pixel = (x, y)
         elif label == "laser_point" and valid:
             valid_laser_pixel = (x, y)
+
+    for corner_x, corner_y in target_corners_normalized:
+        corner = (
+            int(round(corner_x * max(width - 1, 1))),
+            int(round(corner_y * max(height - 1, 1))),
+        )
+        cv2.circle(image, corner, 3, (255, 255, 0), -1, cv2.LINE_AA)
+        cv2.circle(image, corner, 4, (255, 255, 255), 1, cv2.LINE_AA)
 
     if valid_target_pixel is not None:
         arrow_start = valid_laser_pixel or center
@@ -591,11 +601,23 @@ class CenterRunMonitor:
                 self.raw_recorder.close()
                 print(f"monitor: saved {self.raw_recorder.frame_count} raw frame(s) to {self.raw_output_path}")
 
-    def on_frame(self, captured: Any, points: list[PointPrediction], update: AimUpdate) -> None:
+    def on_frame(
+        self,
+        captured: Any,
+        points: list[PointPrediction],
+        update: AimUpdate,
+        target_corners_normalized: TargetCorners = (),
+    ) -> None:
         if not self.enabled:
             return
 
-        annotated = draw_aim_frame(captured.frame_bgr, points, update, self.conf_threshold)
+        annotated = draw_aim_frame(
+            captured.frame_bgr,
+            points,
+            update,
+            self.conf_threshold,
+            target_corners_normalized,
+        )
         status = {
             "type": "vision_status",
             "task": "center_then_flash",
@@ -607,6 +629,7 @@ class CenterRunMonitor:
             "pts_ns": getattr(captured, "pts_ns", None),
             "age_ms": round(captured_age_seconds(captured) * 1000.0, 1),
             "points": points,
+            "target_corners_normalized": target_corners_normalized,
             "valid": update.valid,
             "moved": update.moved,
             "settled": update.settled,
@@ -710,7 +733,12 @@ def center_target(
             else:
                 cached_frame = None
         if on_frame is not None:
-            on_frame(captured, points, update)
+            on_frame(
+                captured,
+                points,
+                update,
+                getattr(vision_frame, "target_corners_normalized", ()),
+            )
 
         if update.settled and fresh:
             settled_frames += 1
@@ -789,7 +817,12 @@ def track_target(
             else:
                 cached_frame = None
         if on_frame is not None:
-            on_frame(captured, points, update)
+            on_frame(
+                captured,
+                points,
+                update,
+                getattr(vision_frame, "target_corners_normalized", ()),
+            )
 
         if update.step is not None:
             print(
@@ -874,7 +907,12 @@ def run_laser_alignment_loop(
                 now_monotonic_ns=time.monotonic_ns(),
             )
             if on_frame is not None:
-                on_frame(vision_frame.captured, vision_frame.points, aim_update)
+                on_frame(
+                    vision_frame.captured,
+                    vision_frame.points,
+                    aim_update,
+                    vision_frame.target_corners_normalized,
+                )
             if aim_update.valid and aim_update.step is not None:
                 target = servo.target
                 assert target is not None

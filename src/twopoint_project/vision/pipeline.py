@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from twopoint_project.vision.inferencer import (
     PointPrediction,
+    TargetCorners,
     VisionInferenceDetails,
     VisionInferencer,
 )
@@ -40,6 +41,7 @@ class VisionResult:
     target_area_normalized: float | None = None
     target_distance_cm: float | None = None
     laser_area_prediction: LaserAreaPrediction | None = None
+    target_corners_normalized: TargetCorners = ()
 
     @property
     def inference_duration_ns(self) -> int:
@@ -209,15 +211,18 @@ class VisionProducer:
                         detections = details.detections
                         target_area_normalized = details.target_area_normalized
                         target_distance_cm = details.target_distance_cm
+                        target_corners_normalized = details.target_corners_normalized
                     else:
                         points, detections = details
                         target_area_normalized = None
                         target_distance_cm = None
+                        target_corners_normalized = ()
                 else:
                     points = self.inferencer.predict(captured.frame_bgr)
                     detections = ()
                     target_area_normalized = None
                     target_distance_cm = None
+                    target_corners_normalized = ()
                 points = list(points)
                 laser_area_prediction = self._predict_laser_point(
                     frame_bgr=captured.frame_bgr,
@@ -256,6 +261,7 @@ class VisionProducer:
                         target_area_normalized=target_area_normalized,
                         target_distance_cm=target_distance_cm,
                         laser_area_prediction=laser_area_prediction,
+                        target_corners_normalized=target_corners_normalized,
                     )
                 )
         except BaseException as exc:

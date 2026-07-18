@@ -375,6 +375,7 @@ class DemoResources:
             vision_frame.points,
             update,
             control_conf_threshold(),
+            vision_frame.target_corners_normalized,
         )
         return annotated, self.status_for(vision_frame, update)
 

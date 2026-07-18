@@ -316,6 +316,7 @@ class NpuPoseInferencer:
         restore_started = time.monotonic_ns()
         restored = tuple(restore_detection(detection, meta) for detection in detections)
         area_distance = None
+        target_corners_normalized = ()
         if not restored:
             point = {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
         else:
@@ -325,6 +326,15 @@ class NpuPoseInferencer:
                 self.target_keypoint_index,
             )
             corners = restored[0].keypoints[1:5]
+            width_scale = max(meta.original_width - 1, 1)
+            height_scale = max(meta.original_height - 1, 1)
+            target_corners_normalized = tuple(
+                (
+                    float(np.clip(corner.x / width_scale, 0.0, 1.0)),
+                    float(np.clip(corner.y / height_scale, 0.0, 1.0)),
+                )
+                for corner in corners
+            )
             area_distance = estimate_area_distance(
                 [(corner.x, corner.y) for corner in corners],
                 frame_width=meta.original_width,
@@ -349,6 +359,7 @@ class NpuPoseInferencer:
             target_distance_cm=(
                 None if area_distance is None else area_distance.distance_cm
             ),
+            target_corners_normalized=target_corners_normalized,
         )
 
     def close(self) -> None:

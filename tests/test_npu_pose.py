@@ -127,6 +127,13 @@ class NpuPoseTest(unittest.TestCase):
         self.assertEqual(details.detections, (first, second))
         self.assertIsNotNone(details.target_area_normalized)
         self.assertIsNotNone(details.target_distance_cm)
+        expected_corners = tuple(
+            (keypoint.x / 1919.0, keypoint.y / 1079.0)
+            for keypoint in first.keypoints[1:5]
+        )
+        for actual, expected in zip(details.target_corners_normalized, expected_corners):
+            self.assertAlmostEqual(actual[0], expected[0])
+            self.assertAlmostEqual(actual[1], expected[1])
         assert details.target_distance_cm is not None
         self.assertAlmostEqual(details.target_distance_cm, 150.0, places=3)
         self.assertIsNotNone(inferencer.last_timing)
@@ -146,6 +153,7 @@ class NpuPoseTest(unittest.TestCase):
         )
         self.assertIsNone(details.target_area_normalized)
         self.assertIsNone(details.target_distance_cm)
+        self.assertEqual(details.target_corners_normalized, ())
 
 
 if __name__ == "__main__":
