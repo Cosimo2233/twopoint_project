@@ -25,25 +25,25 @@
     }
   },
   "closed_loop": {
-    "motor_loop_hz": 30.0,
+    "motor_loop_hz": 50.0,
     "feedback_timeout": 0.01,
     "max_vision_age_seconds": 0.3,
     "angle_deadband_deg": 0.1,
-    "x_angle_gain_deg": 10.0,
-    "y_angle_gain_deg": -10.0,
-    "max_visual_correction_deg": 10.0,
+    "x_angle_gain_deg": 20.0,
+    "y_angle_gain_deg": -20.0,
+    "max_visual_correction_deg": 20.0,
     "pid": {
       "x": {
-        "kp": 1.8,
-        "ki": 0.02,
-        "kd": 0.03,
+        "kp": 70,
+        "ki": 0.05,
+        "kd": 0.01,
         "integral_limit": 0.5,
         "output_limit_deg": 2.0
       },
       "y": {
-        "kp": 1.8,
-        "ki": 0.02,
-        "kd": 0.03,
+        "kp": 10,
+        "ki": 0.05,
+        "kd": 0.01,
         "integral_limit": 0.5,
         "output_limit_deg": 2.0
       }

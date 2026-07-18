@@ -34,6 +34,8 @@ class AngularTarget:
     visual_error_y: float
     x_correction_deg: float
     y_correction_deg: float
+    capture_x_deg: float
+    capture_y_deg: float
     desired_x_deg: float
     desired_y_deg: float
 
@@ -44,11 +46,14 @@ class MotorControlUpdate:
     actual: GimbalAngles
     x_error_deg: float
     y_error_deg: float
+    x_cumulative_moved_deg: float
+    y_cumulative_moved_deg: float
     x_command_deg: float | None
     y_command_deg: float | None
     x_delta_deg: float
     y_delta_deg: float
     settled: bool
+    reason: str | None = None
     x_output: PIDOutput | None = None
     y_output: PIDOutput | None = None
 
@@ -56,16 +61,23 @@ class MotorControlUpdate:
 class AngleHistory:
     def __init__(self, max_samples: int = 256) -> None:
         self._samples: deque[GimbalAngles] = deque(maxlen=max_samples)
+        self._reject_before_first = False
 
     def append(self, angles: GimbalAngles) -> None:
         if self._samples and angles.sampled_at_monotonic_ns < self._samples[-1].sampled_at_monotonic_ns:
             raise ValueError("gimbal angle timestamps must be monotonic")
         self._samples.append(angles)
 
-    def at(self, timestamp_ns: int, fallback: GimbalAngles) -> GimbalAngles:
+    def clear(self, *, reject_before_first: bool = False) -> None:
+        self._samples.clear()
+        self._reject_before_first = reject_before_first
+
+    def at(self, timestamp_ns: int) -> GimbalAngles | None:
         if not self._samples:
-            return fallback
-        if timestamp_ns <= self._samples[0].sampled_at_monotonic_ns:
+            return None
+        if timestamp_ns < self._samples[0].sampled_at_monotonic_ns:
+            return None if self._reject_before_first else self._samples[0]
+        if timestamp_ns == self._samples[0].sampled_at_monotonic_ns:
             return self._samples[0]
         if timestamp_ns >= self._samples[-1].sampled_at_monotonic_ns:
             return self._samples[-1]
@@ -84,7 +96,7 @@ class AngleHistory:
                     feedback_valid=previous.feedback_valid and current.feedback_valid,
                 )
             previous = current
-        return fallback
+        return self._samples[-1]
 
 
 def select_point(
@@ -125,6 +137,11 @@ class LaserAlignmentServo:
         self.target = None
         self._x_state.reset()
         self._y_state.reset()
+
+    def handle_feedback_loss(self) -> None:
+        """Stop the active correction and discard angles spanning a feedback gap."""
+        self.clear_target()
+        self.history.clear(reject_before_first=True)
 
     def accept_vision(
         self,
@@ -168,7 +185,16 @@ class LaserAlignmentServo:
             -limit,
             limit,
         )
-        capture_angles = self.history.at(vision.captured_at_monotonic_ns, actual)
+        capture_angles = self.history.at(vision.captured_at_monotonic_ns)
+        if capture_angles is None:
+            return AimUpdate(
+                False,
+                False,
+                False,
+                "angle_feedback_unavailable_at_capture",
+                None,
+                None,
+            )
         self.target = AngularTarget(
             source_frame_id=vision.source_frame_id,
             captured_at_monotonic_ns=vision.captured_at_monotonic_ns,
@@ -176,6 +202,8 @@ class LaserAlignmentServo:
             visual_error_y=error_y,
             x_correction_deg=correction_x,
             y_correction_deg=correction_y,
+            capture_x_deg=capture_angles.x_deg,
+            capture_y_deg=capture_angles.y_deg,
             desired_x_deg=capture_angles.x_deg + correction_x,
             desired_y_deg=capture_angles.y_deg + correction_y,
         )
@@ -226,15 +254,46 @@ class LaserAlignmentServo:
                 actual=actual,
                 x_error_deg=0.0,
                 y_error_deg=0.0,
+                x_cumulative_moved_deg=0.0,
+                y_cumulative_moved_deg=0.0,
                 x_command_deg=None,
                 y_command_deg=None,
                 x_delta_deg=0.0,
                 y_delta_deg=0.0,
                 settled=False,
+                reason="no_target",
             )
 
-        x_error = target.desired_x_deg - actual.x_deg
-        y_error = target.desired_y_deg - actual.y_deg
+        target_age_seconds = max(
+            now - target.captured_at_monotonic_ns / 1_000_000_000.0,
+            0.0,
+        )
+        if target_age_seconds > self.config.max_vision_age_seconds:
+            self.clear_target()
+            return MotorControlUpdate(
+                target=None,
+                actual=actual,
+                x_error_deg=0.0,
+                y_error_deg=0.0,
+                x_cumulative_moved_deg=0.0,
+                y_cumulative_moved_deg=0.0,
+                x_command_deg=None,
+                y_command_deg=None,
+                x_delta_deg=0.0,
+                y_delta_deg=0.0,
+                settled=False,
+                reason="target_expired",
+            )
+
+        # Each visual result defines a total angular correction at capture time.
+        # The 50 Hz motor loop subtracts the encoder-measured cumulative motion
+        # since that capture, leaving the angle that this PID cycle still needs
+        # to execute. This is algebraically equivalent to desired - actual, but
+        # keeps the control contract explicit and never relies on commanded motion.
+        x_cumulative_moved = actual.x_deg - target.capture_x_deg
+        y_cumulative_moved = actual.y_deg - target.capture_y_deg
+        x_error = target.x_correction_deg - x_cumulative_moved
+        y_error = target.y_correction_deg - y_cumulative_moved
         x_settled = abs(x_error) <= self.config.angle_deadband_deg
         y_settled = abs(y_error) <= self.config.angle_deadband_deg
 
@@ -260,6 +319,8 @@ class LaserAlignmentServo:
             actual=actual,
             x_error_deg=x_error,
             y_error_deg=y_error,
+            x_cumulative_moved_deg=x_cumulative_moved,
+            y_cumulative_moved_deg=y_cumulative_moved,
             x_command_deg=None if settled else actual.x_deg + x_delta,
             y_command_deg=None if settled else actual.y_deg + y_delta,
             x_delta_deg=x_delta,

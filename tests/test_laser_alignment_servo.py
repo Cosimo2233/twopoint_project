@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
@@ -108,11 +109,172 @@ class LaserAlignmentServoTest(unittest.TestCase):
         second = servo.compute_motor_update(halfway, now=2.033)
 
         self.assertAlmostEqual(first.x_error_deg, 1.0)
+        self.assertAlmostEqual(first.x_cumulative_moved_deg, 0.0)
         self.assertAlmostEqual(first.x_delta_deg, 0.5)
         self.assertAlmostEqual(first.x_command_deg or 0.0, 0.5)
         self.assertAlmostEqual(second.x_error_deg, 0.5)
+        self.assertAlmostEqual(second.x_cumulative_moved_deg, 0.5)
         self.assertAlmostEqual(second.x_delta_deg, 0.25)
         self.assertAlmostEqual(second.x_command_deg or 0.0, 0.75)
+
+    def test_motor_pid_uses_actual_cumulative_motion_not_commanded_motion(self) -> None:
+        servo = LaserAlignmentServo(
+            config=make_config(),
+            confidence_threshold=0.5,
+            visual_deadband=0.006,
+        )
+        base = 2_500_000_000
+        initial = GimbalAngles(0.0, 0.0, base)
+        servo.record_angles(initial)
+        servo.accept_vision(
+            make_vision(
+                frame_id=1,
+                captured_at_ns=base,
+                target_x=0.6,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            initial,
+            now_monotonic_ns=base,
+        )
+
+        first = servo.compute_motor_update(initial, now=2.5)
+        lagging = GimbalAngles(0.2, 0.0, base + 20_000_000)
+        second = servo.compute_motor_update(lagging, now=2.52)
+        later = GimbalAngles(0.3, 0.0, base + 40_000_000)
+        third = servo.compute_motor_update(later, now=2.54)
+
+        self.assertAlmostEqual(first.x_command_deg or 0.0, 0.5)
+        self.assertAlmostEqual(second.x_cumulative_moved_deg, 0.2)
+        self.assertAlmostEqual(second.x_error_deg, 0.8)
+        self.assertAlmostEqual(third.x_cumulative_moved_deg, 0.3)
+        self.assertAlmostEqual(third.x_error_deg, 0.7)
+
+    def test_new_visual_frame_replaces_target_and_resets_pid_history(self) -> None:
+        gains = PIDAxisGains(
+            kp=0.5,
+            ki=1.0,
+            kd=1.0,
+            integral_limit=1.0,
+            output_limit_deg=10.0,
+        )
+        servo = LaserAlignmentServo(
+            config=replace(make_config(), x_pid=gains, y_pid=gains),
+            confidence_threshold=0.5,
+            visual_deadband=0.006,
+        )
+        base = 3_000_000_000
+        initial = GimbalAngles(0.0, 0.0, base)
+        servo.record_angles(initial)
+        servo.accept_vision(
+            make_vision(
+                frame_id=1,
+                captured_at_ns=base,
+                target_x=0.6,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            initial,
+            now_monotonic_ns=base,
+        )
+        servo.compute_motor_update(initial, now=3.0)
+        servo.compute_motor_update(GimbalAngles(0.1, 0.0, base + 20_000_000), now=3.02)
+
+        replacement_angles = GimbalAngles(0.1, 0.0, base + 40_000_000)
+        servo.record_angles(replacement_angles)
+        servo.accept_vision(
+            make_vision(
+                frame_id=2,
+                captured_at_ns=base + 40_000_000,
+                target_x=0.4,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            replacement_angles,
+            now_monotonic_ns=base + 40_000_000,
+        )
+        update = servo.compute_motor_update(replacement_angles, now=3.04)
+
+        self.assertEqual(update.target.source_frame_id if update.target else None, 2)
+        self.assertIsNotNone(update.x_output)
+        assert update.x_output is not None
+        self.assertAlmostEqual(update.x_output.i, 0.0)
+        self.assertAlmostEqual(update.x_output.d, 0.0)
+        self.assertAlmostEqual(update.x_output.derivative, 0.0)
+
+    def test_visual_target_expires_from_capture_time(self) -> None:
+        servo = LaserAlignmentServo(
+            config=replace(make_config(), max_vision_age_seconds=0.3),
+            confidence_threshold=0.5,
+            visual_deadband=0.006,
+        )
+        base = 4_000_000_000
+        actual = GimbalAngles(0.0, 0.0, base)
+        servo.record_angles(actual)
+        servo.accept_vision(
+            make_vision(
+                frame_id=1,
+                captured_at_ns=base,
+                target_x=0.6,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            actual,
+            now_monotonic_ns=base,
+        )
+
+        still_valid = servo.compute_motor_update(actual, now=4.3)
+        expired = servo.compute_motor_update(actual, now=4.3001)
+
+        self.assertIsNotNone(still_valid.x_command_deg)
+        self.assertEqual(expired.reason, "target_expired")
+        self.assertIsNone(expired.x_command_deg)
+        self.assertIsNone(servo.target)
+
+    def test_feedback_gap_requires_a_frame_captured_after_recovery(self) -> None:
+        servo = LaserAlignmentServo(
+            config=make_config(),
+            confidence_threshold=0.5,
+            visual_deadband=0.006,
+        )
+        base = 5_000_000_000
+        servo.record_angles(GimbalAngles(0.0, 0.0, base))
+        servo.handle_feedback_loss()
+        recovered = GimbalAngles(0.2, 0.0, base + 100_000_000)
+        servo.record_angles(recovered)
+
+        during_gap = servo.accept_vision(
+            make_vision(
+                frame_id=1,
+                captured_at_ns=base + 50_000_000,
+                target_x=0.6,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            recovered,
+            now_monotonic_ns=base + 100_000_000,
+        )
+        after_recovery = servo.accept_vision(
+            make_vision(
+                frame_id=2,
+                captured_at_ns=base + 100_000_000,
+                target_x=0.6,
+                target_y=0.5,
+                laser_x=0.5,
+                laser_y=0.5,
+            ),
+            recovered,
+            now_monotonic_ns=base + 100_000_000,
+        )
+
+        self.assertFalse(during_gap.valid)
+        self.assertEqual(during_gap.reason, "angle_feedback_unavailable_at_capture")
+        self.assertTrue(after_recovery.valid)
 
     def test_invalid_distance_does_not_replace_existing_angle_target(self) -> None:
         servo = LaserAlignmentServo(

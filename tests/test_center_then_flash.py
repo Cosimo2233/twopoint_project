@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -262,7 +262,92 @@ class StopAfterCalls:
         return self.calls >= self.limit
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 class CenterThenFlashTest(unittest.TestCase):
+    def test_fixed_deadline_scheduler_uses_20ms_grid_and_skips_missed_slots(self) -> None:
+        clock = FakeClock()
+        scheduler = center_then_flash.FixedDeadlineScheduler(
+            50.0,
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+        first_started = clock()
+        clock.advance(0.005)
+        first = scheduler.wait_for_next(first_started)
+        self.assertFalse(first.overran)
+        self.assertAlmostEqual(clock.now, 0.02)
+        self.assertAlmostEqual(clock.sleeps[-1], 0.015)
+
+        second_started = clock()
+        clock.advance(0.045)
+        second = scheduler.wait_for_next(second_started)
+        self.assertTrue(second.overran)
+        self.assertEqual(second.skipped_deadlines, 2)
+        self.assertAlmostEqual(clock.now, 0.065)
+
+        third_started = clock()
+        clock.advance(0.005)
+        third = scheduler.wait_for_next(third_started)
+        self.assertFalse(third.overran)
+        self.assertAlmostEqual(clock.now, 0.08)
+        self.assertAlmostEqual(clock.sleeps[-1], 0.01)
+
+    def test_feedback_reader_pauses_instead_of_using_commanded_angles(self) -> None:
+        recovered = GimbalAngles(1.0, 2.0, 123)
+        gimbal = Mock()
+        gimbal.read_angles.side_effect = [TimeoutError("missing"), recovered]
+        reader = center_then_flash.GimbalFeedbackReader(gimbal, timeout=0.01)
+
+        self.assertIsNone(reader.read())
+        gimbal.commanded_angles.assert_not_called()
+        self.assertIs(reader.read(), recovered)
+        self.assertTrue(reader.recovered_this_read)
+
+    def test_feedback_reader_rejects_non_encoder_angle_data(self) -> None:
+        gimbal = Mock()
+        gimbal.read_angles.return_value = GimbalAngles(1.0, 2.0, 123, feedback_valid=False)
+        reader = center_then_flash.GimbalFeedbackReader(gimbal, timeout=0.01)
+
+        self.assertIsNone(reader.read())
+        self.assertTrue(reader.feedback_unavailable)
+
+    def test_motor_loop_does_not_command_motion_without_encoder_feedback(self) -> None:
+        gimbal = FakeGimbal()
+        feedback = SimpleNamespace(
+            read=lambda: None,
+            recovered_this_read=False,
+        )
+        servo = Mock()
+
+        center_then_flash.run_laser_alignment_loop(
+            vision=FakeVisionFrames([]),
+            gimbal=gimbal,
+            feedback=feedback,
+            servo=servo,
+            loop_hz=0,
+            stop_requested=StopAfterCalls(2),
+            phase="test",
+        )
+
+        self.assertEqual(gimbal.moves, [])
+        servo.handle_feedback_loss.assert_called_once_with()
+
     def test_run_centers_then_turns_laser_on_and_disables_gimbal(self) -> None:
         fake_gimbal = FakeGimbal()
         fake_laser = FakeLaser()

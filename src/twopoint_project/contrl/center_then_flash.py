@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 import json
 from pathlib import Path
 import select
@@ -845,34 +845,106 @@ def track_target(
     print("track: stop requested")
 
 
+@dataclass(frozen=True)
+class LoopTiming:
+    elapsed_seconds: float
+    overrun_seconds: float
+    overrun_count: int
+    skipped_deadlines: int
+
+    @property
+    def overran(self) -> bool:
+        return self.overrun_seconds > 0.0
+
+
+class FixedDeadlineScheduler:
+    """Keep a fixed monotonic deadline grid without burst catch-up."""
+
+    def __init__(
+        self,
+        loop_hz: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.period_seconds = 0.0 if loop_hz <= 0 else 1.0 / loop_hz
+        self._clock = clock
+        self._sleeper = sleeper
+        self._next_deadline = (
+            None if self.period_seconds <= 0 else self._clock() + self.period_seconds
+        )
+        self.overrun_count = 0
+
+    def wait_for_next(self, iteration_started_at: float) -> LoopTiming:
+        now = self._clock()
+        elapsed = max(now - iteration_started_at, 0.0)
+        deadline = self._next_deadline
+        if deadline is None:
+            return LoopTiming(elapsed, 0.0, self.overrun_count, 0)
+
+        if now <= deadline:
+            remaining = deadline - now
+            if remaining > 0:
+                self._sleeper(remaining)
+            self._next_deadline = deadline + self.period_seconds
+            return LoopTiming(elapsed, 0.0, self.overrun_count, 0)
+
+        overrun = now - deadline
+        skipped = int(overrun // self.period_seconds) + 1
+        self._next_deadline = deadline + skipped * self.period_seconds
+        self.overrun_count += 1
+        return LoopTiming(elapsed, overrun, self.overrun_count, skipped)
+
+
+def wait_for_motor_deadline(
+    scheduler: FixedDeadlineScheduler,
+    iteration_started_at: float,
+    *,
+    phase: str,
+) -> None:
+    timing = scheduler.wait_for_next(iteration_started_at)
+    if timing.overran:
+        print(
+            f"{phase}: motor loop overrun #{timing.overrun_count} "
+            f"elapsed={timing.elapsed_seconds * 1000.0:.1f}ms "
+            f"late={timing.overrun_seconds * 1000.0:.1f}ms "
+            f"skipped_deadlines={timing.skipped_deadlines}"
+        )
+
+
 class GimbalFeedbackReader:
-    """Read encoder angles, falling back to commanded angles on feedback errors."""
+    """Read real encoder angles and report outages without command fallback."""
 
     def __init__(self, gimbal: Any, timeout: float) -> None:
         self.gimbal = gimbal
         self.timeout = timeout
-        self.using_fallback = False
+        self.feedback_unavailable = False
         self.recovered_this_read = False
 
-    def initialize(self) -> Any:
+    def initialize(self) -> Any | None:
         angles = self.read()
-        if angles.feedback_valid:
+        if angles is not None:
             self.gimbal.sync_commanded_angles(angles)
         return angles
 
-    def read(self) -> Any:
+    def read(self) -> Any | None:
         self.recovered_this_read = False
         try:
             angles = self.gimbal.read_angles(timeout=self.timeout)
         except (OSError, TimeoutError, ValueError) as exc:
-            if not self.using_fallback:
-                print(f"gimbal feedback unavailable; using commanded-angle fallback: {exc}")
-            self.using_fallback = True
-            return self.gimbal.commanded_angles()
-        if self.using_fallback:
-            print("gimbal feedback recovered; resuming encoder closed loop")
+            if not self.feedback_unavailable:
+                print(f"gimbal feedback unavailable; pausing angle control: {exc}")
+            self.feedback_unavailable = True
+            return None
+        if not angles.feedback_valid:
+            if not self.feedback_unavailable:
+                print("gimbal feedback unavailable; refusing non-encoder angle data")
+            self.feedback_unavailable = True
+            return None
+        if self.feedback_unavailable:
+            print("gimbal feedback recovered; waiting for a fresh visual target")
             self.recovered_this_read = True
-        self.using_fallback = False
+        self.feedback_unavailable = False
         return angles
 
 
@@ -890,13 +962,17 @@ def run_laser_alignment_loop(
     phase: str,
 ) -> bool:
     settled_frames = 0
+    scheduler = FixedDeadlineScheduler(loop_hz)
     while not stop_requested() and (deadline is None or time.monotonic() < deadline):
         loop_started_at = time.monotonic()
         angles = feedback.read()
+        if angles is None:
+            settled_frames = 0
+            servo.handle_feedback_loss()
+            wait_for_motor_deadline(scheduler, loop_started_at, phase=phase)
+            continue
         if feedback.recovered_this_read:
-            # Commanded-angle fallback and encoder feedback may use different
-            # origins. Wait for a fresh visual target before moving again.
-            servo.clear_target()
+            gimbal.sync_commanded_angles(angles)
         servo.record_angles(angles)
 
         vision_frame = vision.read_nowait_latest()
@@ -922,7 +998,7 @@ def run_laser_alignment_loop(
                     f"correction=({target.x_correction_deg:+.3f},{target.y_correction_deg:+.3f})deg "
                     f"angle_target=({target.desired_x_deg:+.3f},{target.desired_y_deg:+.3f})deg "
                     f"feedback=({angles.x_deg:+.3f},{angles.y_deg:+.3f})deg "
-                    f"source={'encoder' if angles.feedback_valid else 'command-fallback'} "
+                    f"source=encoder "
                     f"distance={vision_frame.target_distance_cm:.1f}cm"
                 )
             else:
@@ -940,10 +1016,26 @@ def run_laser_alignment_loop(
                 return True
 
         motor_update = servo.compute_motor_update(angles, now=time.monotonic())
+        if motor_update.reason == "target_expired":
+            print(f"{phase}: visual angle target expired; holding position")
+        elif motor_update.target is not None:
+            command = (
+                "hold"
+                if motor_update.x_command_deg is None or motor_update.y_command_deg is None
+                else f"({motor_update.x_command_deg:+.3f},{motor_update.y_command_deg:+.3f})deg"
+            )
+            print(
+                f"{phase}: pid frame={motor_update.target.source_frame_id} "
+                f"remaining=({motor_update.x_error_deg:+.3f},{motor_update.y_error_deg:+.3f})deg "
+                f"encoder_moved=({motor_update.x_cumulative_moved_deg:+.3f},"
+                f"{motor_update.y_cumulative_moved_deg:+.3f})deg "
+                f"output=({motor_update.x_delta_deg:+.3f},{motor_update.y_delta_deg:+.3f})deg "
+                f"command={command} settled={motor_update.settled}"
+            )
         if motor_update.x_command_deg is not None and motor_update.y_command_deg is not None:
             gimbal.move_to(motor_update.x_command_deg, motor_update.y_command_deg)
 
-        sleep_for_loop_rate(loop_started_at, loop_hz)
+        wait_for_motor_deadline(scheduler, loop_started_at, phase=phase)
 
     if deadline is not None and time.monotonic() >= deadline:
         print(f"{phase}: timeout")
@@ -1136,7 +1228,8 @@ def run_track(
                 timeout=task_config.closed_loop.feedback_timeout,
             )
             initial_angles = feedback.initialize()
-            servo.record_angles(initial_angles)
+            if initial_angles is not None:
+                servo.record_angles(initial_angles)
 
             try:
                 if task_config.laser.on_during_run:

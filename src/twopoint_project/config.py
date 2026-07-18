@@ -257,7 +257,7 @@ class CenterConfig:
 
 @dataclass(frozen=True)
 class TrackClosedLoopConfig:
-    motor_loop_hz: float = 100.0
+    motor_loop_hz: float = 50.0
     feedback_timeout: float = 0.003
     max_vision_age_seconds: float = 0.3
     angle_deadband_deg: float = 0.1
