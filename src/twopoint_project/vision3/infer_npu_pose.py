@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 import threading
 import time
@@ -139,28 +140,49 @@ def restore_detection(detection: PoseDetection, meta: LetterboxMeta) -> PoseDete
 def target_center_prediction(
     detections: list[PoseDetection],
     meta: LetterboxMeta,
-    keypoint_index: int,
-) -> PointPrediction:
-    if not detections:
-        return {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
+) -> PointPrediction | None:
+    restored = tuple(restore_detection(detection, meta) for detection in detections)
+    selected = select_target_detection(restored)
+    if selected is None:
+        return None
+    return target_center_from_restored_detection(selected, meta)
 
-    restored = restore_detection(detections[0], meta)
-    return target_center_from_restored_detection(restored, meta, keypoint_index)
+
+def select_target_detection(
+    detections: tuple[PoseDetection, ...],
+) -> PoseDetection | None:
+    """Choose the accepted box whose semantic center keypoint is most likely."""
+    candidates = []
+    for detection in detections:
+        center = detection.keypoints[0]
+        x1, y1, x2, y2 = detection.box
+        if (
+            isfinite(center.x)
+            and isfinite(center.y)
+            and isfinite(center.confidence)
+            and x1 <= center.x <= x2
+            and y1 <= center.y <= y2
+        ):
+            candidates.append(detection)
+    return max(
+        candidates,
+        key=lambda detection: detection.keypoints[0].confidence,
+        default=None,
+    )
 
 
 def target_center_from_restored_detection(
     restored: PoseDetection,
     meta: LetterboxMeta,
-    keypoint_index: int,
 ) -> PointPrediction:
-    keypoint = restored.keypoints[keypoint_index]
+    keypoint = restored.keypoints[0]
     width_scale = max(meta.original_width - 1, 1)
     height_scale = max(meta.original_height - 1, 1)
     return {
         "label": "target_center",
         "x": float(np.clip(keypoint.x / width_scale, 0.0, 1.0)),
         "y": float(np.clip(keypoint.y / height_scale, 0.0, 1.0)),
-        "confidence": float(min(restored.score, keypoint.confidence)),
+        "confidence": float(keypoint.confidence),
     }
 
 
@@ -171,23 +193,19 @@ class NpuPoseInferencer:
         library_path: Path,
         *,
         img_size: int = INPUT_SIZE,
-        score_threshold: float = 0.4,
+        box_confidence_threshold: float = 0.4,
         nms_threshold: float = 0.45,
-        target_keypoint_index: int = 0,
     ) -> None:
         if img_size != INPUT_SIZE:
             raise ValueError(f"A733 pose model requires img_size={INPUT_SIZE}, got {img_size}")
-        if not 0 <= target_keypoint_index < KEYPOINT_COUNT:
-            raise ValueError(
-                f"target_keypoint_index must be between 0 and {KEYPOINT_COUNT - 1}, "
-                f"got {target_keypoint_index}"
-            )
         self.model_path = Path(model_path)
         self.library_path = Path(library_path)
         self.img_size = img_size
-        self.score_threshold = validate_unit_interval(score_threshold, "score_threshold")
+        self.box_confidence_threshold = validate_unit_interval(
+            box_confidence_threshold,
+            "box_confidence_threshold",
+        )
         self.nms_threshold = validate_unit_interval(nms_threshold, "nms_threshold")
-        self.target_keypoint_index = target_keypoint_index
         self._library: ctypes.CDLL | None = None
         self._context: int | None = None
         self._owner_thread: int | None = None
@@ -243,7 +261,7 @@ class NpuPoseInferencer:
         library = self._load_library()
         context = library.pose_create(
             str(self.model_path.resolve()).encode("utf-8"),
-            self.score_threshold,
+            self.box_confidence_threshold,
             self.nms_threshold,
         )
         if not context:
@@ -314,18 +332,19 @@ class NpuPoseInferencer:
     ) -> VisionInferenceDetails:
         detections, meta = self.predict_detections(frame_bgr)
         restore_started = time.monotonic_ns()
-        restored = tuple(restore_detection(detection, meta) for detection in detections)
+        restored = tuple(
+            restore_detection(detection, meta)
+            for detection in detections
+            if detection.score >= self.box_confidence_threshold
+        )
+        selected = select_target_detection(restored)
         area_distance = None
         target_corners_normalized = ()
-        if not restored:
-            point = {"label": "target_center", "x": 0.0, "y": 0.0, "confidence": 0.0}
+        if selected is None:
+            points = []
         else:
-            point = target_center_from_restored_detection(
-                restored[0],
-                meta,
-                self.target_keypoint_index,
-            )
-            corners = restored[0].keypoints[1:5]
+            points = [target_center_from_restored_detection(selected, meta)]
+            corners = selected.keypoints[1:5]
             width_scale = max(meta.original_width - 1, 1)
             height_scale = max(meta.original_height - 1, 1)
             target_corners_normalized = tuple(
@@ -340,7 +359,6 @@ class NpuPoseInferencer:
                 frame_width=meta.original_width,
                 frame_height=meta.original_height,
                 confidences=[corner.confidence for corner in corners],
-                confidence_threshold=self.score_threshold,
             )
         if self.last_timing is not None:
             self.last_timing = PoseTiming(
@@ -351,7 +369,7 @@ class NpuPoseInferencer:
                 - restore_started,
             )
         return VisionInferenceDetails(
-            points=[point],
+            points=points,
             detections=restored,
             target_area_normalized=(
                 None if area_distance is None else area_distance.area_normalized

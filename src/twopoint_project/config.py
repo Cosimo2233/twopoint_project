@@ -6,11 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from twopoint_project.contrl.target_center_servo import (
-    FeedForwardConfig,
-    PIDAxisGains,
-    validate_conf_threshold,
-)
+from twopoint_project.contrl.target_center_servo import FeedForwardConfig, PIDAxisGains
+from twopoint_project.contrl.laser_alignment_servo import TrackClosedLoopConfig
 from twopoint_project.f32c.gimbal import (
     DEFAULT_BAUDRATE,
     DEFAULT_COMMAND_INTERVAL,
@@ -31,8 +28,7 @@ from twopoint_project.vision.inferencer import (
     DEFAULT_NPU_LIBRARY_PATH,
     DEFAULT_NPU_MODEL_PATH,
     DEFAULT_NPU_NMS_THRESHOLD,
-    DEFAULT_NPU_SCORE_THRESHOLD,
-    DEFAULT_NPU_TARGET_KEYPOINT_INDEX,
+    DEFAULT_NPU_BOX_CONFIDENCE_THRESHOLD,
     DEFAULT_ONNX_PATH,
     DEFAULT_VISION_BACKEND,
 )
@@ -78,9 +74,8 @@ class VisionConfig:
     npu_model_path: str = DEFAULT_NPU_MODEL_PATH
     npu_library_path: str = DEFAULT_NPU_LIBRARY_PATH
     img_size: int = DEFAULT_IMG_SIZE
-    npu_score_threshold: float = DEFAULT_NPU_SCORE_THRESHOLD
+    npu_box_confidence_threshold: float = DEFAULT_NPU_BOX_CONFIDENCE_THRESHOLD
     npu_nms_threshold: float = DEFAULT_NPU_NMS_THRESHOLD
-    npu_target_keypoint_index: int = DEFAULT_NPU_TARGET_KEYPOINT_INDEX
 
 
 @dataclass(frozen=True)
@@ -194,7 +189,6 @@ def target_filter_from_dict(data: dict[str, Any]) -> TargetCenterFilterConfig:
 
 @dataclass(frozen=True)
 class CenterConfig:
-    conf_threshold: float = 0.5
     target_x: float = 0.5
     target_y: float = 0.5
     x_gain_deg: float = -8.0
@@ -212,7 +206,6 @@ class CenterConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CenterConfig:
-        conf_threshold = validate_conf_threshold(float(data.get("conf_threshold", cls.conf_threshold)))
         stable_frames = int(data.get("stable_frames", cls.stable_frames))
         if stable_frames <= 0:
             raise ValueError("center.stable_frames must be greater than 0")
@@ -232,7 +225,6 @@ class CenterConfig:
         feedforward_data = section(data, "feedforward") if "feedforward" in data else {}
         target_filter_data = section(data, "target_filter") if "target_filter" in data else {}
         return cls(
-            conf_threshold=conf_threshold,
             target_x=float(data.get("target_x", cls.target_x)),
             target_y=float(data.get("target_y", cls.target_y)),
             x_gain_deg=x_gain_deg,
@@ -255,86 +247,76 @@ class CenterConfig:
         )
 
 
-@dataclass(frozen=True)
-class TrackClosedLoopConfig:
-    motor_loop_hz: float = 50.0
-    feedback_timeout: float = 0.003
-    max_vision_age_seconds: float = 0.3
-    angle_deadband_deg: float = 0.1
-    x_angle_gain_deg: float = 10.0
-    y_angle_gain_deg: float = -10.0
-    max_visual_correction_deg: float = 10.0
-    x_pid: PIDAxisGains = PIDAxisGains(
-        kp=0.8,
-        ki=0.0,
-        kd=0.02,
-        integral_limit=0.5,
-        output_limit_deg=2.0,
+def track_closed_loop_from_dict(data: dict[str, Any]) -> TrackClosedLoopConfig:
+    defaults = TrackClosedLoopConfig()
+    motor_loop_hz = float(data.get("motor_loop_hz", defaults.motor_loop_hz))
+    feedback_timeout = float(data.get("feedback_timeout", defaults.feedback_timeout))
+    max_vision_age_seconds = float(
+        data.get("max_vision_age_seconds", defaults.max_vision_age_seconds)
     )
-    y_pid: PIDAxisGains = PIDAxisGains(
-        kp=0.8,
-        ki=0.0,
-        kd=0.02,
-        integral_limit=0.5,
-        output_limit_deg=2.0,
+    angle_deadband_deg = float(data.get("angle_deadband_deg", defaults.angle_deadband_deg))
+    max_visual_correction_deg = float(
+        data.get("max_visual_correction_deg", defaults.max_visual_correction_deg)
     )
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TrackClosedLoopConfig:
-        motor_loop_hz = float(data.get("motor_loop_hz", cls.motor_loop_hz))
-        feedback_timeout = float(data.get("feedback_timeout", cls.feedback_timeout))
-        max_vision_age_seconds = float(
-            data.get("max_vision_age_seconds", cls.max_vision_age_seconds)
+    if motor_loop_hz <= 0:
+        raise ValueError("closed_loop.motor_loop_hz must be greater than 0")
+    if feedback_timeout <= 0:
+        raise ValueError("closed_loop.feedback_timeout must be greater than 0")
+    if max_vision_age_seconds < 0:
+        raise ValueError("closed_loop.max_vision_age_seconds must be non-negative")
+    if angle_deadband_deg < 0:
+        raise ValueError("closed_loop.angle_deadband_deg must be non-negative")
+    if max_visual_correction_deg <= 0:
+        raise ValueError("closed_loop.max_visual_correction_deg must be greater than 0")
+    pid_data = section(data, "pid") if "pid" in data else {}
+    feedforward_data = section(data, "feedforward") if "feedforward" in data else {}
+    feedforward = feedforward_from_dict(feedforward_data)
+    if feedforward.lead_time < 0:
+        raise ValueError("closed_loop.feedforward.lead_time must be non-negative")
+    if feedforward.max_prediction_error < 0:
+        raise ValueError(
+            "closed_loop.feedforward.max_prediction_error must be non-negative"
         )
-        angle_deadband_deg = float(data.get("angle_deadband_deg", cls.angle_deadband_deg))
-        max_visual_correction_deg = float(
-            data.get("max_visual_correction_deg", cls.max_visual_correction_deg)
+    if feedforward.max_velocity < 0:
+        raise ValueError("closed_loop.feedforward.max_velocity must be non-negative")
+    if not 0.0 <= feedforward.velocity_alpha <= 1.0:
+        raise ValueError(
+            "closed_loop.feedforward.velocity_alpha must be between 0 and 1"
         )
-        if motor_loop_hz <= 0:
-            raise ValueError("closed_loop.motor_loop_hz must be greater than 0")
-        if feedback_timeout <= 0:
-            raise ValueError("closed_loop.feedback_timeout must be greater than 0")
-        if max_vision_age_seconds < 0:
-            raise ValueError("closed_loop.max_vision_age_seconds must be non-negative")
-        if angle_deadband_deg < 0:
-            raise ValueError("closed_loop.angle_deadband_deg must be non-negative")
-        if max_visual_correction_deg <= 0:
-            raise ValueError("closed_loop.max_visual_correction_deg must be greater than 0")
-        pid_data = section(data, "pid") if "pid" in data else {}
-        x_default = cls.x_pid
-        y_default = cls.y_pid
-        x_pid_data = {
-            "ki": x_default.ki,
-            "kd": x_default.kd,
-            "integral_limit": x_default.integral_limit,
-            **section(pid_data, "x"),
-        }
-        y_pid_data = {
-            "ki": y_default.ki,
-            "kd": y_default.kd,
-            "integral_limit": y_default.integral_limit,
-            **section(pid_data, "y"),
-        }
-        return cls(
-            motor_loop_hz=motor_loop_hz,
-            feedback_timeout=feedback_timeout,
-            max_vision_age_seconds=max_vision_age_seconds,
-            angle_deadband_deg=angle_deadband_deg,
-            x_angle_gain_deg=float(data.get("x_angle_gain_deg", cls.x_angle_gain_deg)),
-            y_angle_gain_deg=float(data.get("y_angle_gain_deg", cls.y_angle_gain_deg)),
-            max_visual_correction_deg=max_visual_correction_deg,
-            x_pid=pid_axis_from_dict(
-                x_pid_data,
-                kp=x_default.kp,
-                output_limit_deg=x_default.output_limit_deg,
-            ),
-            y_pid=pid_axis_from_dict(
-                y_pid_data,
-                kp=y_default.kp,
-                output_limit_deg=y_default.output_limit_deg,
-            ),
-        )
-
+    x_default = defaults.x_pid
+    y_default = defaults.y_pid
+    x_pid_data = {
+        "ki": x_default.ki,
+        "kd": x_default.kd,
+        "integral_limit": x_default.integral_limit,
+        **section(pid_data, "x"),
+    }
+    y_pid_data = {
+        "ki": y_default.ki,
+        "kd": y_default.kd,
+        "integral_limit": y_default.integral_limit,
+        **section(pid_data, "y"),
+    }
+    return TrackClosedLoopConfig(
+        motor_loop_hz=motor_loop_hz,
+        feedback_timeout=feedback_timeout,
+        max_vision_age_seconds=max_vision_age_seconds,
+        angle_deadband_deg=angle_deadband_deg,
+        x_angle_gain_deg=float(data.get("x_angle_gain_deg", defaults.x_angle_gain_deg)),
+        y_angle_gain_deg=float(data.get("y_angle_gain_deg", defaults.y_angle_gain_deg)),
+        max_visual_correction_deg=max_visual_correction_deg,
+        feedforward=feedforward,
+        x_pid=pid_axis_from_dict(
+            x_pid_data,
+            kp=x_default.kp,
+            output_limit_deg=x_default.output_limit_deg,
+        ),
+        y_pid=pid_axis_from_dict(
+            y_pid_data,
+            kp=y_default.kp,
+            output_limit_deg=y_default.output_limit_deg,
+        ),
+    )
 
 @dataclass(frozen=True)
 class LaserConfig:
@@ -426,7 +408,7 @@ class CenterFlashTrackConfig:
             laser=LaserConfig.from_dict(section(data, "laser")),
             behavior=BehaviorConfig.from_dict(section(data, "behavior")),
             recording=RecordingConfig.from_dict(section(data, "recording")),
-            closed_loop=TrackClosedLoopConfig.from_dict(section(data, "closed_loop")),
+            closed_loop=track_closed_loop_from_dict(section(data, "closed_loop")),
         )
 
 
@@ -448,17 +430,13 @@ def runtime_config_from_env(config_path: Path | None = None) -> RuntimeConfig:
             npu_model_path=env_str("TWOPOINT_NPU_MODEL_PATH", DEFAULT_NPU_MODEL_PATH),
             npu_library_path=env_str("TWOPOINT_NPU_LIBRARY_PATH", DEFAULT_NPU_LIBRARY_PATH),
             img_size=env_int("TWOPOINT_IMG_SIZE", DEFAULT_IMG_SIZE),
-            npu_score_threshold=env_float(
-                "TWOPOINT_NPU_SCORE_THRESHOLD",
-                DEFAULT_NPU_SCORE_THRESHOLD,
+            npu_box_confidence_threshold=env_float(
+                "TWOPOINT_NPU_BOX_CONFIDENCE_THRESHOLD",
+                DEFAULT_NPU_BOX_CONFIDENCE_THRESHOLD,
             ),
             npu_nms_threshold=env_float(
                 "TWOPOINT_NPU_NMS_THRESHOLD",
                 DEFAULT_NPU_NMS_THRESHOLD,
-            ),
-            npu_target_keypoint_index=env_int(
-                "TWOPOINT_NPU_TARGET_KEYPOINT_INDEX",
-                DEFAULT_NPU_TARGET_KEYPOINT_INDEX,
             ),
         ),
         webrtc=WebRtcConfig(

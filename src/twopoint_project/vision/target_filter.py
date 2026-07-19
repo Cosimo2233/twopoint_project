@@ -78,8 +78,7 @@ class TargetCenterFilter:
         y = float(selected["y"])
         confidence = float(selected["confidence"])
         if (
-            confidence <= 0.0
-            or not isfinite(confidence)
+            not isfinite(confidence)
             or not isfinite(x)
             or not isfinite(y)
         ):

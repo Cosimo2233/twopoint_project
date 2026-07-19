@@ -11,25 +11,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import hypot
+from math import hypot, isfinite
 import time
 from typing import Protocol, Sequence, TypedDict
 
 
 TARGET_CENTER_LABEL = "target_center"
-DEFAULT_CONTROL_CONF_THRESHOLD = 0.5
-
-
-def validate_conf_threshold(conf_threshold: float) -> float:
-    """校验视觉置信度阈值，阈值必须是 0~1。"""
-    if not 0.0 <= conf_threshold <= 1.0:
-        raise ValueError("conf-threshold must be between 0 and 1")
-    return conf_threshold
-
-
-def control_conf_threshold() -> float:
-    """返回视觉控制默认使用的 target_center 置信度阈值。"""
-    return DEFAULT_CONTROL_CONF_THRESHOLD
 
 
 class PointPrediction(TypedDict):
@@ -242,15 +229,15 @@ class AimUpdate:
 
 def select_target_center(
     points: Sequence[PointPrediction],
-    *,
-    conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
 ) -> TargetCenterObservation | None:
-    """从一帧检测结果中选出可用于控制的 target_center 点。"""
-    conf_threshold = validate_conf_threshold(conf_threshold)
+    """选择置信度最高的有效 target_center，不再应用外部点置信度阈值。"""
     candidates = [
         point
         for point in points
-        if point["label"] == TARGET_CENTER_LABEL and point["confidence"] >= conf_threshold
+        if point["label"] == TARGET_CENTER_LABEL
+        and isfinite(float(point["x"]))
+        and isfinite(float(point["y"]))
+        and isfinite(float(point["confidence"]))
     ]
     if not candidates:
         return None
@@ -318,7 +305,6 @@ class TargetCenterServo:
         y_gain_deg: float = -8.0,
         max_step_deg: float = 1.0,
         deadband: float = 0.006,
-        conf_threshold: float = DEFAULT_CONTROL_CONF_THRESHOLD,
         x_pid: PIDAxisGains | None = None,
         y_pid: PIDAxisGains | None = None,
         feedforward: FeedForwardConfig | None = None,
@@ -326,7 +312,6 @@ class TargetCenterServo:
         self.center_x = center_x
         self.center_y = center_y
         self.deadband = abs(deadband)
-        self.conf_threshold = validate_conf_threshold(conf_threshold)
         self.x_pid = x_pid or PIDAxisGains(kp=x_gain_deg, output_limit_deg=max_step_deg)
         self.y_pid = y_pid or PIDAxisGains(kp=y_gain_deg, output_limit_deg=max_step_deg)
         self.feedforward = feedforward or FeedForwardConfig()
@@ -471,14 +456,14 @@ class TargetCenterServo:
         """从检测点完成一次闭环更新，并在需要时移动云台。"""
         if step_scale < 0:
             raise ValueError("step_scale must be non-negative")
-        target = select_target_center(points, conf_threshold=self.conf_threshold)
+        target = select_target_center(points)
         if target is None:
             self.reset_feedforward()
             return AimUpdate(
                 valid=False,
                 moved=False,
                 settled=False,
-                reason="target_center_low_confidence",
+                reason="target_center_unavailable",
                 target=None,
                 step=None,
             )

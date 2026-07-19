@@ -7,11 +7,12 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Sequence
 
-from twopoint_project.config import TrackClosedLoopConfig
 from twopoint_project.contrl.target_center_servo import (
     AimUpdate,
     CenteringError,
+    FeedForwardConfig,
     GimbalStep,
+    PIDAxisGains,
     PIDAxisState,
     PIDOutput,
     PointPrediction,
@@ -27,11 +28,46 @@ TARGET_CENTER_LABEL = "target_center"
 
 
 @dataclass(frozen=True)
+class TrackClosedLoopConfig:
+    """Parameters owned by the encoder-feedback laser alignment controller."""
+
+    motor_loop_hz: float = 50.0
+    feedback_timeout: float = 0.003
+    max_vision_age_seconds: float = 0.3
+    angle_deadband_deg: float = 0.1
+    x_angle_gain_deg: float = 10.0
+    y_angle_gain_deg: float = -10.0
+    max_visual_correction_deg: float = 10.0
+    feedforward: FeedForwardConfig = FeedForwardConfig()
+    x_pid: PIDAxisGains = PIDAxisGains(
+        kp=0.8,
+        ki=0.0,
+        kd=0.02,
+        integral_limit=0.5,
+        output_limit_deg=2.0,
+    )
+    y_pid: PIDAxisGains = PIDAxisGains(
+        kp=0.8,
+        ki=0.0,
+        kd=0.02,
+        integral_limit=0.5,
+        output_limit_deg=2.0,
+    )
+
+
+@dataclass(frozen=True)
 class AngularTarget:
     source_frame_id: int
     captured_at_monotonic_ns: int
     visual_error_x: float
     visual_error_y: float
+    raw_x_correction_deg: float
+    raw_y_correction_deg: float
+    feedforward_x_deg: float
+    feedforward_y_deg: float
+    target_velocity_x_deg_s: float
+    target_velocity_y_deg_s: float
+    prediction_horizon_seconds: float
     x_correction_deg: float
     y_correction_deg: float
     capture_x_deg: float
@@ -102,12 +138,11 @@ class AngleHistory:
 def select_point(
     points: Sequence[PointPrediction],
     label: str,
-    confidence_threshold: float,
 ) -> PointPrediction | None:
     candidates = [
         point
         for point in points
-        if point["label"] == label and point["confidence"] >= confidence_threshold
+        if point["label"] == label
     ]
     return max(candidates, key=lambda point: point["confidence"], default=None)
 
@@ -119,16 +154,19 @@ class LaserAlignmentServo:
         self,
         *,
         config: TrackClosedLoopConfig,
-        confidence_threshold: float,
         visual_deadband: float,
     ) -> None:
         self.config = config
-        self.confidence_threshold = confidence_threshold
         self.visual_deadband = abs(visual_deadband)
         self.history = AngleHistory()
         self.target: AngularTarget | None = None
         self._x_state = PIDAxisState()
         self._y_state = PIDAxisState()
+        self._previous_raw_target_x_deg: float | None = None
+        self._previous_raw_target_y_deg: float | None = None
+        self._previous_vision_capture_ns: int | None = None
+        self._target_velocity_x_deg_s = 0.0
+        self._target_velocity_y_deg_s = 0.0
 
     def record_angles(self, angles: GimbalAngles) -> None:
         self.history.append(angles)
@@ -137,11 +175,105 @@ class LaserAlignmentServo:
         self.target = None
         self._x_state.reset()
         self._y_state.reset()
+        self.reset_feedforward()
+
+    def reset_feedforward(self) -> None:
+        self._previous_raw_target_x_deg = None
+        self._previous_raw_target_y_deg = None
+        self._previous_vision_capture_ns = None
+        self._target_velocity_x_deg_s = 0.0
+        self._target_velocity_y_deg_s = 0.0
 
     def handle_feedback_loss(self) -> None:
         """Stop the active correction and discard angles spanning a feedback gap."""
         self.clear_target()
         self.history.clear(reject_before_first=True)
+
+    def apply_feedforward(
+        self,
+        *,
+        capture_angles: GimbalAngles,
+        raw_x_correction_deg: float,
+        raw_y_correction_deg: float,
+        captured_at_monotonic_ns: int,
+        vision_age_seconds: float,
+    ) -> tuple[float, float, float, float, float, float, float]:
+        """Predict the absolute angular target after removing gimbal self-motion."""
+        config = self.config.feedforward
+        raw_target_x = capture_angles.x_deg + raw_x_correction_deg
+        raw_target_y = capture_angles.y_deg + raw_y_correction_deg
+        velocity_x = self._target_velocity_x_deg_s
+        velocity_y = self._target_velocity_y_deg_s
+
+        previous_time = self._previous_vision_capture_ns
+        previous_x = self._previous_raw_target_x_deg
+        previous_y = self._previous_raw_target_y_deg
+        if previous_time is not None and previous_x is not None and previous_y is not None:
+            dt = (captured_at_monotonic_ns - previous_time) / 1_000_000_000.0
+            gap_limit = self.config.max_vision_age_seconds
+            if dt > 0 and (gap_limit <= 0 or dt <= gap_limit):
+                raw_velocity_x = (raw_target_x - previous_x) / dt
+                raw_velocity_y = (raw_target_y - previous_y) / dt
+                velocity_limit = abs(config.max_velocity)
+                if velocity_limit > 0:
+                    x_limit_deg_s = velocity_limit * abs(self.config.x_angle_gain_deg)
+                    y_limit_deg_s = velocity_limit * abs(self.config.y_angle_gain_deg)
+                    raw_velocity_x = clamp(
+                        raw_velocity_x,
+                        -x_limit_deg_s,
+                        x_limit_deg_s,
+                    )
+                    raw_velocity_y = clamp(
+                        raw_velocity_y,
+                        -y_limit_deg_s,
+                        y_limit_deg_s,
+                    )
+                alpha = clamp(config.velocity_alpha, 0.0, 1.0)
+                velocity_x += (raw_velocity_x - velocity_x) * alpha
+                velocity_y += (raw_velocity_y - velocity_y) * alpha
+            else:
+                velocity_x = 0.0
+                velocity_y = 0.0
+        else:
+            velocity_x = 0.0
+            velocity_y = 0.0
+
+        self._previous_raw_target_x_deg = raw_target_x
+        self._previous_raw_target_y_deg = raw_target_y
+        self._previous_vision_capture_ns = captured_at_monotonic_ns
+        self._target_velocity_x_deg_s = velocity_x
+        self._target_velocity_y_deg_s = velocity_y
+
+        if not config.enabled:
+            return (
+                raw_x_correction_deg,
+                raw_y_correction_deg,
+                0.0,
+                0.0,
+                velocity_x,
+                velocity_y,
+                0.0,
+            )
+
+        horizon = vision_age_seconds + config.lead_time
+        feedforward_x = velocity_x * horizon
+        feedforward_y = velocity_y * horizon
+        prediction_limit = abs(config.max_prediction_error)
+        if prediction_limit > 0:
+            x_limit_deg = prediction_limit * abs(self.config.x_angle_gain_deg)
+            y_limit_deg = prediction_limit * abs(self.config.y_angle_gain_deg)
+            feedforward_x = clamp(feedforward_x, -x_limit_deg, x_limit_deg)
+            feedforward_y = clamp(feedforward_y, -y_limit_deg, y_limit_deg)
+
+        return (
+            raw_x_correction_deg + feedforward_x,
+            raw_y_correction_deg + feedforward_y,
+            feedforward_x,
+            feedforward_y,
+            velocity_x,
+            velocity_y,
+            horizon,
+        )
 
     def accept_vision(
         self,
@@ -160,27 +292,29 @@ class LaserAlignmentServo:
         target_point = select_point(
             vision.points,
             TARGET_CENTER_LABEL,
-            self.confidence_threshold,
         )
         laser_point = select_point(
             vision.points,
             LASER_POINT_LABEL,
-            self.confidence_threshold,
         )
         if target_point is None:
-            return AimUpdate(False, False, False, "target_center_low_confidence", None, None)
-        if laser_point is None or vision.target_distance_cm is None:
+            return AimUpdate(False, False, False, "target_center_unavailable", None, None)
+        if (
+            laser_point is None
+            or laser_point["confidence"] <= 0.0
+            or vision.target_distance_cm is None
+        ):
             return AimUpdate(False, False, False, "laser_or_distance_unavailable", None, None)
 
         error_x = float(target_point["x"] - laser_point["x"])
         error_y = float(target_point["y"] - laser_point["y"])
         limit = abs(self.config.max_visual_correction_deg)
-        correction_x = clamp(
+        raw_correction_x = clamp(
             error_x * self.config.x_angle_gain_deg,
             -limit,
             limit,
         )
-        correction_y = clamp(
+        raw_correction_y = clamp(
             error_y * self.config.y_angle_gain_deg,
             -limit,
             limit,
@@ -195,11 +329,35 @@ class LaserAlignmentServo:
                 None,
                 None,
             )
+        (
+            correction_x,
+            correction_y,
+            feedforward_x,
+            feedforward_y,
+            target_velocity_x,
+            target_velocity_y,
+            prediction_horizon,
+        ) = self.apply_feedforward(
+            capture_angles=capture_angles,
+            raw_x_correction_deg=raw_correction_x,
+            raw_y_correction_deg=raw_correction_y,
+            captured_at_monotonic_ns=vision.captured_at_monotonic_ns,
+            vision_age_seconds=age_seconds,
+        )
+        correction_x = clamp(correction_x, -limit, limit)
+        correction_y = clamp(correction_y, -limit, limit)
         self.target = AngularTarget(
             source_frame_id=vision.source_frame_id,
             captured_at_monotonic_ns=vision.captured_at_monotonic_ns,
             visual_error_x=error_x,
             visual_error_y=error_y,
+            raw_x_correction_deg=raw_correction_x,
+            raw_y_correction_deg=raw_correction_y,
+            feedforward_x_deg=feedforward_x,
+            feedforward_y_deg=feedforward_y,
+            target_velocity_x_deg_s=target_velocity_x,
+            target_velocity_y_deg_s=target_velocity_y,
+            prediction_horizon_seconds=prediction_horizon,
             x_correction_deg=correction_x,
             y_correction_deg=correction_y,
             capture_x_deg=capture_angles.x_deg,

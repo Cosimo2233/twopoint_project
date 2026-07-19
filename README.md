@@ -39,16 +39,16 @@ The runtime configuration is:
 TWOPOINT_VISION_BACKEND=npu_pose
 TWOPOINT_NPU_MODEL_PATH=model-bin/pose/best_pcq_a733.nb
 TWOPOINT_NPU_LIBRARY_PATH=build/npu/libyolo11_pose_npu.so
-TWOPOINT_NPU_SCORE_THRESHOLD=0.4
+TWOPOINT_NPU_BOX_CONFIDENCE_THRESHOLD=0.4
 TWOPOINT_NPU_NMS_THRESHOLD=0.45
-TWOPOINT_NPU_TARGET_KEYPOINT_INDEX=0
 TWOPOINT_IMG_SIZE=640
 ```
 
-`TWOPOINT_NPU_TARGET_KEYPOINT_INDEX` selects which of the model's five pose
-keypoints becomes the shared `target_center` prediction. On the current
-`best_pcq_a733.nb`, the A7A smoke test confirmed that keypoint 0 is the target
-center and keypoints 1-4 are the four target corners.
+`TWOPOINT_NPU_BOX_CONFIDENCE_THRESHOLD` filters pose boxes before target
+selection. Keypoint 0 is the semantic target center and keypoints 1-4 are the
+four target corners. Among accepted boxes, the center keypoint with the highest
+confidence is used directly; there is no separately configurable center-point
+confidence threshold.
 
 For a video hardware check, the script reads the NPU model settings from `.env`
 and writes an annotated MP4:

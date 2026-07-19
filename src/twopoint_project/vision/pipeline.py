@@ -37,6 +37,7 @@ class VisionResult:
     inference_finished_monotonic_ns: int
     captured: Any
     points: list[PointPrediction]
+    raw_target_center: PointPrediction | None = None
     detections: tuple[Any, ...] = ()
     source_frames_skipped: int = 0
     preprocessing_duration_ns: int | None = None
@@ -231,6 +232,15 @@ class VisionProducer:
                     target_area_normalized = None
                     target_distance_cm = None
                     target_corners_normalized = ()
+                raw_target_center = max(
+                    (
+                        dict(point)
+                        for point in points
+                        if point["label"] == "target_center"
+                    ),
+                    key=lambda point: float(point["confidence"]),
+                    default=None,
+                )
                 points = self.target_filter.filter_points(points)
                 laser_area_prediction = self._predict_laser_point(
                     frame_bgr=captured.frame_bgr,
@@ -261,6 +271,7 @@ class VisionProducer:
                         inference_finished_monotonic_ns=inference_finished,
                         captured=captured,
                         points=points,
+                        raw_target_center=raw_target_center,
                         detections=tuple(detections),
                         source_frames_skipped=skipped,
                         preprocessing_duration_ns=getattr(timing, "preprocess_ns", None),

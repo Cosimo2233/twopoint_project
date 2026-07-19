@@ -31,9 +31,8 @@ class CommandAppTest(unittest.TestCase):
             "TWOPOINT_NPU_MODEL_PATH": "model-bin/pose/test.nb",
             "TWOPOINT_NPU_LIBRARY_PATH": "build/test/libpose.so",
             "TWOPOINT_IMG_SIZE": "320",
-            "TWOPOINT_NPU_SCORE_THRESHOLD": "0.25",
+            "TWOPOINT_NPU_BOX_CONFIDENCE_THRESHOLD": "0.25",
             "TWOPOINT_NPU_NMS_THRESHOLD": "0.55",
-            "TWOPOINT_NPU_TARGET_KEYPOINT_INDEX": "3",
             "TWOPOINT_WEBRTC_ENABLED": "false",
             "TWOPOINT_WEBRTC_HOST": "127.0.0.1",
             "TWOPOINT_WEBRTC_PORT": "18080",
@@ -53,9 +52,8 @@ class CommandAppTest(unittest.TestCase):
         self.assertEqual(runtime_config.vision.npu_model_path, "model-bin/pose/test.nb")
         self.assertEqual(runtime_config.vision.npu_library_path, "build/test/libpose.so")
         self.assertEqual(runtime_config.vision.img_size, 320)
-        self.assertEqual(runtime_config.vision.npu_score_threshold, 0.25)
+        self.assertEqual(runtime_config.vision.npu_box_confidence_threshold, 0.25)
         self.assertEqual(runtime_config.vision.npu_nms_threshold, 0.55)
-        self.assertEqual(runtime_config.vision.npu_target_keypoint_index, 3)
         self.assertFalse(runtime_config.webrtc.enabled)
         self.assertEqual(runtime_config.webrtc.host, "127.0.0.1")
         self.assertEqual(runtime_config.webrtc.port, 18080)
@@ -70,6 +68,11 @@ class CommandAppTest(unittest.TestCase):
         self.assertTrue(task_config.recording.save_raw_video)
         self.assertEqual(task_config.closed_loop.motor_loop_hz, 50.0)
         self.assertEqual(task_config.closed_loop.feedback_timeout, 0.01)
+        self.assertTrue(task_config.closed_loop.feedforward.enabled)
+        self.assertEqual(task_config.closed_loop.feedforward.lead_time, 0.04)
+        self.assertEqual(task_config.closed_loop.feedforward.max_prediction_error, 0.05)
+        self.assertEqual(task_config.closed_loop.feedforward.max_velocity, 2.0)
+        self.assertEqual(task_config.closed_loop.feedforward.velocity_alpha, 0.35)
         self.assertGreater(task_config.closed_loop.x_pid.output_limit_deg, 0)
         self.assertGreater(task_config.closed_loop.y_pid.output_limit_deg, 0)
         self.assertTrue(task_config.center.target_filter.enabled)

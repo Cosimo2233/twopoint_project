@@ -25,11 +25,6 @@ def env_float(name: str, default: float) -> float:
     return default if value is None or value == "" else float(value)
 
 
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return default if value is None or value == "" else int(value)
-
-
 def parse_args() -> argparse.Namespace:
     load_dotenv()
     parser = argparse.ArgumentParser(
@@ -48,19 +43,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT_PATH))
     parser.add_argument(
-        "--score-threshold",
+        "--box-confidence-threshold",
         type=float,
-        default=env_float("TWOPOINT_NPU_SCORE_THRESHOLD", 0.4),
+        default=env_float("TWOPOINT_NPU_BOX_CONFIDENCE_THRESHOLD", 0.4),
     )
     parser.add_argument(
         "--nms-threshold",
         type=float,
         default=env_float("TWOPOINT_NPU_NMS_THRESHOLD", 0.45),
-    )
-    parser.add_argument(
-        "--target-keypoint-index",
-        type=int,
-        default=env_int("TWOPOINT_NPU_TARGET_KEYPOINT_INDEX", 0),
     )
     parser.add_argument(
         "--point-radius",
@@ -87,7 +77,6 @@ def draw_detection(
     frame: cv2.typing.MatLike,
     detection: PoseDetection,
     *,
-    target_keypoint_index: int,
     point_radius: int,
 ) -> None:
     x1, y1, x2, y2 = detection.box
@@ -107,7 +96,7 @@ def draw_detection(
     )
 
     for keypoint_index, keypoint in enumerate(detection.keypoints):
-        color = (0, 255, 0) if keypoint_index == target_keypoint_index else (0, 165, 255)
+        color = (0, 255, 0) if keypoint_index == 0 else (0, 165, 255)
         point = (int(round(keypoint.x)), int(round(keypoint.y)))
         cv2.circle(frame, point, point_radius, color, -1, cv2.LINE_8)
         cv2.putText(
@@ -164,9 +153,8 @@ def main() -> None:
     inferencer = NpuPoseInferencer(
         args.model,
         args.library,
-        score_threshold=args.score_threshold,
+        box_confidence_threshold=args.box_confidence_threshold,
         nms_threshold=args.nms_threshold,
-        target_keypoint_index=args.target_keypoint_index,
     )
     frame_count = 0
     detection_count = 0
@@ -182,7 +170,6 @@ def main() -> None:
                 draw_detection(
                     frame,
                     detection,
-                    target_keypoint_index=args.target_keypoint_index,
                     point_radius=args.point_radius,
                 )
             writer.write(frame)

@@ -12,7 +12,6 @@
     "debug_frames": false
   },
   "center": {
-    "conf_threshold": 0.5,
     "target_x": 0.5,
     "target_y": 0.5,
     "pid": {

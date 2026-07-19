@@ -1,151 +1,124 @@
-请基于当前项目，将 USB 摄像头到 YOLO11n-pose 控制链路整理为低延迟、只保留最新帧和最新结果的实时架构。
+# 当前仓库可复用工程模式总结（初稿）
 
-目标链路：
+这个仓库最值得复用的，不是某个具体视觉或云台算法，而是一套适合“多硬件、多算法、多任务组合”的工程组织方法：用统一入口启动任务，用分层配置描述运行环境和任务参数，用稳定接口连接各模块，并让每个模块都可以脱离整机单独验证。
 
-稳定的 `/dev/v4l/by-id/...` 设备路径
-→ GStreamer `v4l2src` + 明确 caps
-→ MJPEG 解码 + `videoconvert`
-→ `appsink`
-→ 采集线程
-→ `LatestCapturedFrame`
-→ NPU 推理线程
-→ YOLO11n-pose 预处理
-→ A7A VIPLite NPU + 后处理
-→ `LatestVisionState`
-→ 控制线程
+## 一、当前仓库做得比较好的地方
 
-请重点修改和确认以下内容：
+### 1. 统一命令入口，降低运行和交付成本
 
-1. 使用稳定设备路径，不依赖易变化的摄像头数字索引。程序自动枚举
-   `/dev/v4l/by-id/*-video-index0`：恰好一个候选时使用；没有候选或存在
-   多个候选时明确报错，不能回退到 `/dev/video0`。
+`src/twopoint_project/command/app.py` 使用 Typer 提供统一的 `run` 命令，调用链清楚：
 
-2. GStreamer pipeline 中明确配置：
+```text
+CLI → 加载 .env → 加载任务 JSON → 构造强类型配置 → 按 mode 分发任务
+```
 
-   * 摄像头分辨率
-   * FPS
-   * MJPEG 格式
-   * 解码前使用 `queue max-size-buffers=1 leaky=downstream` 丢弃旧压缩帧
-   * `appsink max-buffers=1`
-   * 非阻塞丢弃旧帧、保留最新帧
-   * `sync=false`
+这比为每个业务流程维护一套独立启动脚本更容易使用、测试和扩展，也适合作为后续 skill 的默认项目入口模式。
 
-3. 当前设备使用 GStreamer 1.18.4。该版本 appsink 的 `drop=true` 明确定义为
-   队列满时丢弃旧 buffer，并且没有新版 `leaky-type` 属性。因此最终使用
-   `max-buffers=1 drop=true sync=false emit-signals=false enable-last-sample=false
-   wait-on-eos=false`；解码前的 queue 使用 `leaky=downstream` 丢弃旧 buffer。
+### 2. 全局环境与单任务参数分层
 
-4. 采集线程只负责：
+- `.env` 保存机器或部署环境相关参数，例如摄像头规格、模型路径、NPU 动态库和 WebRTC 地址。
+- `configs/tasks/*.json` 保存某个任务独有的业务参数，例如任务模式、PID、超时、激光行为和录像策略。
+- CLI 的 `--config` 允许显式选择任务配置。
 
-   * 从 appsink 取 sample
-   * 校验帧
-   * 生成递增 `frame_id`
-   * 记录 `time.monotonic_ns()`
-   * 读取并保存 GstBuffer 的 PTS、duration
-   * 发布最新 `CapturedFrame`
+这种分层能让同一个任务配置迁移到不同设备，也能在同一设备上快速切换任务。仓库还用 `dataclass(frozen=True)` 将松散配置转成不可变、带类型的运行对象，并对部分关键范围进行了校验。
 
-   不要在采集线程中执行模型预处理、推理、后处理、画图或控制逻辑。
+### 3. 模块按职责拆分，主链路边界较清楚
 
-5. 处理好 GstBuffer 到 NumPy 的内存生命周期。不能在 sample 释放或 buffer unmap 后继续持有失效的 NumPy view。第一版可在发布 `CapturedFrame` 前明确复制一次。
+代码已按 `command`、`tasks`、`contrl`、`vision`、`f32c`、`flash` 等目录划分。任务层负责编排，视觉层负责采集和推理，设备层负责协议与执行器控制。相比把硬件、算法和流程写进一个脚本，这种结构更利于局部替换和故障定位。
 
-6. `LatestCapturedFrame` 必须是非阻塞覆盖式状态槽，不是普通阻塞 FIFO 队列：
+### 4. 用固定接口支持多方案替换
 
-   * 容量为 1
-   * 新帧覆盖旧帧
-   * 生产者不能因满队列阻塞
-   * 推理线程只处理尚未处理过的最新 `frame_id`
+仓库已经体现了“面向接口，不面向具体实现”的思路：
 
-7. 推理线程每次完成推理后，重新获取当前最新帧，不处理历史积压帧。
+- `VisionInferencer`、`FrameCapture`、`GimbalLike`、`SerialLike`、`GPIOLine` 使用 `Protocol` 描述最小接口。
+- `build_vision_inferencer()` 可以在 traditional、ONNX、NPU pose 后端之间切换。
+- `VisionInferenceDetails`、`VisionResult` 等统一了模块间传递的数据结构。
+- 测试通过 Fake/Mock 注入摄像头、云台、激光和推理器，不依赖整套真实硬件。
 
-8. YOLO11n-pose 预处理保持独立：
+这使关键类或函数可以被直接替换，适合做多算法、多设备后端和多控制策略的对比验证。
 
-   * 可选 ROI
-   * Letterbox 到模型尺寸
-   * RGB
-   * UINT8
-   * 按 VIPLite 模型真实输入要求处理 layout 和量化
+### 5. 实时链路采用“只保留最新状态”的明确语义
 
-9. 不要同时在 GStreamer 和模型预处理层重复 resize。GStreamer只负责采集、解码和必要的颜色转换，Letterbox 只在模型预处理层执行。
+`LatestCapturedFrame` 和 `LatestVisionState` 使用覆盖式最新值，而不是让普通 FIFO 持续积压历史帧。结果中还携带帧编号、流代次和单调时钟时间，可用于跳帧统计、结果新鲜度判断和摄像头重连隔离。这是实时视觉控制项目中很有复用价值的设计原则。
 
-10. 当前业务绘制、录像、WebRTC 和其他视觉后端统一使用 BGR，因此第一版
-    appsink 输出 BGR，由 YOLO11n-pose 预处理转换为 RGB。完成性能埋点后，
-    再决定是否把公共图像契约整体迁移为 RGB，不能让 RGB 图像继续使用
-    `frame_bgr` 命名。
+### 6. 同时具备自动测试和硬件单项调试工具
 
-11. 预处理必须保存：
+- `tests/test_*.py` 覆盖配置分发、协议、采集、视觉、控制和激光等逻辑。
+- Fake/Mock 测试可在无硬件环境验证大部分控制流程。
+- `scripts/f32c_probe.py`、`f32c_motion_test.py`、`f32c_disable.py` 等工具可单独排查电机和串口问题。
+- NPU 原生后处理有独立 C++/CTest 测试。
+- 摄像头、NPU 视频、WebRTC 还提供了面向实际设备的演示或冒烟工具。
 
-* 原图宽高
-* 模型输入宽高
-* scale
-* pad_left
-* pad_top
-* ROI offset
+这种“纯逻辑单测 + 模块级硬件诊断 + 整链路测试”的分层方式很适合沉淀成通用 skill。
 
-12. 后处理时，bbox 和全部关键点必须使用同一套 scale、padding 和 ROI offset 映射回原始画面。
+## 二、当前还可以进一步改进的地方
 
-13. `VisionResult` 必须关联：
+### 1. 把配置契约做得更严格、更可发现
 
-* `camera_id`
-* `stream_generation`
-* `source_frame_id`
-* 帧时间戳
-* 推理开始时间
-* 推理结束时间
-* bbox
-* bbox confidence
-* keypoints
-* keypoint confidence
+目前 JSON 主要靠手写 `from_dict()` 解析，未知字段会被静默忽略，部分布尔值直接使用 `bool(value)`，对字符串等错误输入不够安全。建议：
 
-14. `LatestVisionState` 同样使用非阻塞覆盖式状态槽，不使用可能阻塞的容量 1 FIFO 队列。
+- 使用 Pydantic、JSON Schema 或等价方案统一校验类型、范围和必填字段。
+- 明确配置优先级：CLI > 环境变量 > 任务 JSON > 默认值。
+- 启动时输出最终生效配置，但自动脱敏密钥或隐私字段。
+- 为每种 `mode` 提供可校验的配置模型和示例文件。
+- 增加 `.env.example`，只保留变量名、说明和安全默认值。
 
-15. 控制线程只读取最新视觉状态，并检查结果新鲜度。结果超过允许时限后必须视为 stale，不能继续作为有效控制输入。
+### 2. 降低配置层对业务实现层的反向依赖
 
-16. 摄像头重连后递增 `stream_generation`。帧和视觉结果都必须携带该字段，避免重连前的旧结果污染新视频流。
+当前 `config.py` 会从控制、云台、采集和推理模块导入默认值或配置类型，使配置层与具体实现耦合。更稳妥的方向是把公共契约、配置模型和默认值放入独立的 `core`/`contracts` 层，再由具体模块依赖它，避免底层实现变化牵动总配置模块。
 
-17. 处理 GStreamer ERROR、EOS、sample timeout、USB 拔出和重新插入。重建 pipeline 后重新应用 caps。
+### 3. 将任务和后端分发改为注册机制
 
-18. 分别统计并记录：
+目前新增任务或视觉后端需要继续修改 `if/elif` 分发。规模扩大后，可以引入显式注册表：
 
-* sample 获取间隔
-* MJPEG 解码和颜色转换后的采集耗时
-* GstBuffer → NumPy copy 耗时
-* Letterbox 耗时
-* VIPLite 推理耗时
-* Pose 后处理耗时
-* 端到端帧龄
-* 跳过帧数
+```text
+mode/backend 名称 → 配置模型 → 构造函数或 runner
+```
 
-19. 不要在每帧创建新线程或异步任务。长期线程控制在：
+这样新增方案只需注册实现，并能在启动时统一检查重复名称、缺失实现和接口兼容性。
 
-* Capture Thread
-* Inference Thread
-* Control Thread
-* 可选 Display/Recording Thread
+### 4. 继续拆分过大的编排模块
 
-   VIPLite context 必须在 Inference Thread 内创建、推理并销毁，不能跨线程使用。
+`contrl/center_then_flash.py` 已超过 1300 行，同时承担调度、反馈、控制、录像和任务流程等职责。建议拆成控制循环、调度器、状态机、录像/可视化适配器和资源生命周期管理等小模块，使单元测试更聚焦，也减少修改一个功能时影响整条链路的风险。
 
-20. 保持现有业务逻辑不变，只调整采集、缓存、推理和结果发布的数据流与并发模型。
+### 5. 统一命名和目录语义
 
-最终请输出：
+- `contrl` 建议逐步更名为 `control`，并保留一段兼容导入期。
+- `vision`、`vision2`、`vision3` 不容易表达方案差异，建议改为 `vision/backends/traditional.py`、`onnx.py`、`npu_pose.py` 等语义化结构。
+- `tests/` 中同时存在单元测试、硬件测试、调试脚本和 demo，建议拆成 `tests/unit`、`tests/integration`、`tests/hardware`，运行型工具统一放入 `tools/` 或注册为 CLI 子命令。
+- 当前统一入口使用 Typer，但不少调试工具仍用 argparse；可逐步统一为 Typer 子命令，共享配置加载、日志和错误处理。
 
-* 修改后的数据流说明
-* 涉及的文件和类
-* 关键并发结构
-* appsink 最终参数
-* `CapturedFrame` 和 `VisionResult` 字段
-* 性能埋点位置
-* 摄像头异常和重连流程
+### 6. 建立一致的测试基线和 CI 分层
 
+本次轻量验证运行 `poetry run python -m unittest tests.test_command_app` 时，发现 `center_flash_track.json` 中 `lead_time=0.03`，而测试期望 `0.04`，说明配置与断言已经发生漂移。建议：
 
+- 默认 CI 只运行无硬件单元测试。
+- 硬件/NPU测试使用明确 marker、环境开关或独立命令。
+- 增加格式化、静态检查、类型检查、配置校验和覆盖率门槛。
+- 避免测试重复手工构造大段配置，改用共享 fixture/builder。
+- 修复或明确上述 `lead_time` 的唯一事实来源。
 
+### 7. 完善项目可交付性和运行可观测性
 
-关于摄像头的配置统一走.env，采集策略写死，实时模式，消费最新帧。
-设备路径由程序按上面的唯一 `/dev/v4l/by-id/*-video-index0` 规则自动解析，
-因此环境变量只配置下面三个参数。
+- 在 `pyproject.toml` 增加正式 console script，使安装后可直接执行命令，而不依赖模块路径。
+- README 增加项目结构、完整快速开始、任务配置说明、测试矩阵和故障排查入口。
+- 用结构化日志统一记录任务、帧 ID、耗时、丢帧、重连和硬件错误，减少临时 `print`。
+- 统一异常分类、退出码、超时、资源关闭和安全停机行为。
+- 不提交 CTest/build 等生成产物；当前仍有 `Testing/Temporary/CTestCostData.txt` 被 Git 跟踪，应移出版本管理。
 
-先默认 1280×720@30
-TWOPOINT_CAMERA_WIDTH=1280
-TWOPOINT_CAMERA_HEIGHT=720
-TWOPOINT_CAMERA_FPS=30
-只配置这三个
-.json里不配置摄像
+## 三、后续整理成 skill 时建议提炼的核心规则
+
+后续 skill 不应照搬本仓库业务代码，而应抽取以下可复用检查表和模板：
+
+1. 用 Typer 建立唯一主入口和可组合子命令。
+2. 将部署环境、任务参数和临时 CLI 覆盖分层，并定义清晰优先级。
+3. 每个任务配置都必须经过强类型校验后再进入业务代码。
+4. 按职责组织模块，以稳定的 Protocol/数据对象作为连接契约。
+5. 变化频繁的算法或硬件实现放在接口后面，通过工厂或注册表选择。
+6. 实时系统明确选择 FIFO 或 latest-only 语义，并记录时戳、来源和新鲜度。
+7. 每个模块同时提供无硬件单测和最小硬件诊断入口。
+8. 整链路测试与硬件测试必须和默认单测隔离。
+9. 新增任务或后端时，同步增加配置示例、契约测试、错误路径测试和文档。
+10. 在交付前检查命名、依赖方向、生成产物、日志、资源释放和安全停机。
+
+建议未来将 skill 定位为“为硬件/视觉控制类 Python 项目搭建可替换、可配置、可独立调试的模块化任务架构”，并附带项目骨架、配置模板、接口模板、测试模板和仓库检查脚本。
