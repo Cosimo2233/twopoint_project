@@ -38,9 +38,12 @@ class MonitorTest(unittest.TestCase):
                 webrtc_port=8080,
                 backend="traditional",
                 providers=["fake"],
+                task_name="center_flash_track",
             )
             adapter.on_frame(captured, [], update)
 
+        _, status = adapter.frame_buffer.snapshot()
+        self.assertEqual(status["task"], "center_flash_track")
         self.assertEqual([item.label for item in FakeVideoRecorder.instances], ["annotated", "raw"])
         self.assertEqual(FakeVideoRecorder.instances[1].output_path.name, "center_flash_track_20260714_120000_raw.mp4")
         self.assertEqual(len(FakeVideoRecorder.instances[0].frames), 1)
@@ -68,4 +71,3 @@ class MonitorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

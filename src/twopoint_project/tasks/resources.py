@@ -53,6 +53,15 @@ def validate_runtime(task_config: TaskRuntimeConfig, runtime_config: RuntimeConf
         raise ValueError("TWOPOINT_WEBRTC_PORT must be greater than 0")
 
 
+def monitor_fps(task_config: TaskRuntimeConfig, runtime_config: RuntimeConfig) -> float:
+    if isinstance(task_config, CenterFlashTrackConfig):
+        return min(
+            float(runtime_config.camera.fps),
+            task_config.closed_loop.motor_loop_hz,
+        )
+    return task_config.center.loop_hz
+
+
 @contextmanager
 def open_task_resources(
     task_config: TaskRuntimeConfig,
@@ -102,17 +111,17 @@ def open_task_resources(
         )
         laser = stack.enter_context(open_laser_pointer(initial_on=False))
         stack.callback(laser.off)
-        monitor = stack.enter_context(
-            CenterRunMonitor(
-                enabled=runtime_config.webrtc.enabled,
-                output_path=output_path,
-                fps=task_config.center.loop_hz,
-                save_raw_video=task_config.recording.save_raw_video,
-                webrtc_host=runtime_config.webrtc.host,
-                webrtc_port=runtime_config.webrtc.port,
-                backend=runtime_config.vision.backend,
-                providers=inferencer.providers,
-            )
+        monitor = CenterRunMonitor(
+            enabled=runtime_config.webrtc.enabled,
+            output_path=output_path,
+            fps=monitor_fps(task_config, runtime_config),
+            save_raw_video=task_config.recording.save_raw_video,
+            webrtc_host=runtime_config.webrtc.host,
+            webrtc_port=runtime_config.webrtc.port,
+            backend=runtime_config.vision.backend,
+            providers=inferencer.providers,
+            task_name=task_config.mode,
         )
+        stack.callback(monitor.close)
         resources = TaskResources(inferencer, capture, gimbal, vision, laser, monitor)
         yield resources

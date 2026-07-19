@@ -16,6 +16,7 @@ def run(task_config: TaskConfig, runtime_config: RuntimeConfig) -> bool:
     with open_task_resources(task_config, runtime_config) as resources:
         _log_configuration(task_config, runtime_config, resources)
         _initialize(resources)
+        resources.monitor.start()
         centered = _center(task_config, resources, servo)
         _fire_if_allowed(task_config, resources, centered)
         return centered

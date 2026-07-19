@@ -28,6 +28,15 @@ def run(
         with open_task_resources(task_config, runtime_config) as resources:
             _log_configuration(task_config, runtime_config, resources)
             feedback = _initialize(task_config, resources, servo)
+            resources.monitor.start()
+            if task_config.laser.on_during_run:
+                return _run_continuous_tracking(
+                    task_config,
+                    resources,
+                    feedback,
+                    servo,
+                    stop_requested,
+                )
             centered = _center(task_config, resources, feedback, servo)
             _track_after_center(
                 task_config,
@@ -49,7 +58,9 @@ def _initialize(
     servo: LaserAlignmentServo,
 ) -> GimbalFeedbackReader:
     resources.laser.off()
+    print("gimbal: initializing and enabling motors")
     resources.gimbal.initialize()
+    print("gimbal: motors enabled")
     feedback = GimbalFeedbackReader(
         resources.gimbal,
         timeout=task_config.closed_loop.feedback_timeout,
@@ -57,10 +68,44 @@ def _initialize(
     initial_angles = feedback.initialize()
     if initial_angles is not None:
         servo.record_angles(initial_angles)
-    if task_config.laser.on_during_run:
-        print("laser: on")
-        resources.laser.on()
     return feedback
+
+
+def _run_continuous_tracking(
+    task_config: CenterFlashTrackConfig,
+    resources: TaskResources,
+    feedback: GimbalFeedbackReader,
+    servo: LaserAlignmentServo,
+    stop_requested: StopCallback | None,
+) -> bool:
+    stopper_context: ContextManager[EscKeyStopper | None]
+    if stop_requested is None:
+        stopper_context = EscKeyStopper()
+    else:
+        print("track: using injected stop callback")
+        stopper_context = nullcontext(None)
+
+    with stopper_context as stopper:
+        operator_stop = stop_requested if stop_requested is not None else stopper.should_stop
+
+        def should_stop() -> bool:
+            return resources.monitor.stop_requested() or operator_stop()
+
+        print("laser: on for continuous tracking")
+        resources.laser.on()
+        print("track: continuous tracking started")
+        run_laser_alignment_loop(
+            vision=resources.vision,
+            gimbal=resources.gimbal,
+            feedback=feedback,
+            servo=servo,
+            loop_hz=task_config.closed_loop.motor_loop_hz,
+            stop_requested=should_stop,
+            on_frame=resources.monitor.on_frame if resources.monitor.enabled else None,
+            phase="track",
+        )
+    print("track: continuous tracking stopped")
+    return True
 
 
 def _center(

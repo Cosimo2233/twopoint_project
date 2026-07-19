@@ -401,11 +401,13 @@ class CenterWebRtcServer:
         port: int,
         frame_buffer: LatestAnnotatedFrame,
         stop_event: threading.Event,
+        task_name: str,
     ) -> None:
         self.host = host
         self.port = port
         self.frame_buffer = frame_buffer
         self.stop_event = stop_event
+        self.task_name = task_name
         self.broadcaster = WebRtcStatusBroadcaster()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -471,7 +473,8 @@ class CenterWebRtcServer:
                 return frame
 
         async def index(_: Any) -> Any:
-            return web.Response(text=WEBRTC_INDEX_HTML, content_type="text/html")
+            page = WEBRTC_INDEX_HTML.replace("center_then_flash", self.task_name)
+            return web.Response(text=page, content_type="text/html")
 
         async def health(_: Any) -> Any:
             _, status = frame_buffer.snapshot()
@@ -547,6 +550,7 @@ class CenterRunMonitor:
         webrtc_port: int,
         backend: str,
         providers: list[str],
+        task_name: str = "center_then_flash",
     ) -> None:
         self.enabled = enabled
         self.output_path = output_path
@@ -557,6 +561,8 @@ class CenterRunMonitor:
         self.webrtc_port = webrtc_port
         self.backend = backend
         self.providers = providers
+        self.task_name = task_name
+        self._active = False
         self.frame_buffer = LatestAnnotatedFrame()
         self.stop_event = threading.Event()
         self.recorder = VideoRecorder(output_path, fps, "annotated")
@@ -566,21 +572,32 @@ class CenterRunMonitor:
             port=webrtc_port,
             frame_buffer=self.frame_buffer,
             stop_event=self.stop_event,
+            task_name=task_name,
         )
 
     def __enter__(self) -> CenterRunMonitor:
-        if self.enabled:
-            self.server.start()
+        self.start()
         return self
 
     def __exit__(self, *args: object) -> None:
-        if self.enabled:
-            self.server.stop()
-            self.recorder.close()
-            print(f"monitor: saved {self.recorder.frame_count} frame(s) to {self.output_path}")
-            if self.raw_recorder is not None:
-                self.raw_recorder.close()
-                print(f"monitor: saved {self.raw_recorder.frame_count} raw frame(s) to {self.raw_output_path}")
+        self.close()
+
+    def start(self) -> None:
+        if not self.enabled or self._active:
+            return
+        self.server.start()
+        self._active = True
+
+    def close(self) -> None:
+        if not self._active:
+            return
+        self.server.stop()
+        self.recorder.close()
+        print(f"monitor: saved {self.recorder.frame_count} frame(s) to {self.output_path}")
+        if self.raw_recorder is not None:
+            self.raw_recorder.close()
+            print(f"monitor: saved {self.raw_recorder.frame_count} raw frame(s) to {self.raw_output_path}")
+        self._active = False
 
     def on_frame(
         self,
@@ -602,7 +619,7 @@ class CenterRunMonitor:
         )
         status = {
             "type": "vision_status",
-            "task": "center_then_flash",
+            "task": self.task_name,
             "backend": self.backend,
             "providers": self.providers,
             "frame_id": captured.frame_id,

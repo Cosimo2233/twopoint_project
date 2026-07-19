@@ -10,6 +10,7 @@ from tests.center_fakes import (
     FakeGimbal,
     FakeInferencer,
     FakeLaser,
+    make_constant_laser_track_config,
     make_runtime_config,
     make_task_config,
     make_track_config,
@@ -19,7 +20,12 @@ from twopoint_project.tasks import resources as task_resources
 
 
 def fake_resources() -> SimpleNamespace:
-    monitor = SimpleNamespace(enabled=False, on_frame=Mock(), stop_requested=lambda: False)
+    monitor = SimpleNamespace(
+        enabled=False,
+        start=Mock(),
+        on_frame=Mock(),
+        stop_requested=lambda: False,
+    )
     return SimpleNamespace(
         inferencer=SimpleNamespace(providers=["fake"]),
         gimbal=FakeGimbal(),
@@ -59,6 +65,9 @@ class TaskFlowTest(unittest.TestCase):
                 return self
 
             def __exit__(self, *args: object) -> None:
+                self.closed = True
+
+            def close(self) -> None:
                 self.closed = True
 
         vision = ContextResource(closed=False)
@@ -128,6 +137,38 @@ class TaskFlowTest(unittest.TestCase):
         self.assertEqual(alignment_loop.call_count, 2)
         self.assertIn("on", resources.laser.events)
         self.assertEqual(resources.laser.events[-1], "off")
+
+    def test_track_task_runs_one_continuous_loop_when_laser_stays_on(self) -> None:
+        resources = fake_resources()
+        events: list[str] = []
+        resources.gimbal.initialize = Mock(side_effect=lambda: events.append("motor_enable"))
+        resources.monitor.start = Mock(side_effect=lambda: events.append("monitor_start"))
+        resources.laser.on = Mock(side_effect=lambda: events.append("laser_on"))
+        with patch.object(
+            center_flash_track,
+            "open_task_resources",
+            return_value=nullcontext(resources),
+        ), patch.object(
+            center_flash_track,
+            "run_laser_alignment_loop",
+            side_effect=lambda **_: events.append("tracking") or False,
+        ) as alignment_loop:
+            result = center_flash_track.run(
+                make_constant_laser_track_config(),
+                make_runtime_config(),
+                stop_requested=lambda: False,
+            )
+
+        self.assertTrue(result)
+        alignment_loop.assert_called_once()
+        call = alignment_loop.call_args.kwargs
+        self.assertEqual(call["phase"], "track")
+        self.assertNotIn("deadline", call)
+        self.assertNotIn("stable_frames", call)
+        self.assertEqual(
+            events,
+            ["motor_enable", "monitor_start", "laser_on", "tracking"],
+        )
 
 
 if __name__ == "__main__":
