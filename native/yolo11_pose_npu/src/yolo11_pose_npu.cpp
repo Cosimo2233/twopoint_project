@@ -1,11 +1,13 @@
 #include "yolo11_pose_npu.h"
 
+#include "preprocess.h"
 #include "postprocess.h"
 
 #include <vip_lite.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -41,6 +43,7 @@ struct PoseContext {
     bool runtime_initialized = false;
     bool network_prepared = false;
     bool owns_runtime_reservation = false;
+    PoseNativeTiming last_timing{};
 
     ~PoseContext() {
         cleanup();
@@ -308,6 +311,99 @@ bool initialize_context(PoseContext &context, const char *model_path) {
     return true;
 }
 
+using SteadyClock = std::chrono::steady_clock;
+
+std::uint64_t elapsed_ns(
+    const SteadyClock::time_point &started,
+    const SteadyClock::time_point &finished = SteadyClock::now()
+) {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(finished - started).count()
+    );
+}
+
+int run_prepared_input(
+    PoseContext &context,
+    PoseDetection *detections,
+    int max_detections,
+    const SteadyClock::time_point &total_started
+) {
+    const auto input_flush_started = SteadyClock::now();
+    if (!context.check(
+            vip_flush_buffer(context.input.buffer, VIP_BUFFER_OPER_TYPE_FLUSH),
+            "flush input buffer"
+        )) {
+        return -1;
+    }
+    context.last_timing.input_flush_ns = elapsed_ns(input_flush_started);
+
+    const auto network_started = SteadyClock::now();
+    if (!context.check(vip_run_network(context.network), "vip_run_network")) {
+        return -1;
+    }
+    context.last_timing.network_ns = elapsed_ns(network_started);
+
+    std::array<const float *, twopoint::pose::kOutputCount> semantic_outputs{};
+    std::array<void *, twopoint::pose::kOutputCount> mapped_outputs{};
+    const auto output_map_started = SteadyClock::now();
+    for (std::size_t semantic = 0; semantic < semantic_outputs.size(); ++semantic) {
+        const int actual = context.semantic_to_actual[semantic];
+        Tensor &tensor = context.outputs[actual];
+        if (!context.check(
+                vip_flush_buffer(tensor.buffer, VIP_BUFFER_OPER_TYPE_INVALIDATE),
+                "invalidate output buffer"
+            )) {
+            for (std::size_t mapped = 0; mapped < semantic; ++mapped) {
+                vip_unmap_buffer(context.outputs[context.semantic_to_actual[mapped]].buffer);
+            }
+            return -1;
+        }
+        mapped_outputs[semantic] = vip_map_buffer(tensor.buffer);
+        if (mapped_outputs[semantic] == nullptr) {
+            context.fail("vip_map_buffer returned null for output");
+            for (std::size_t mapped = 0; mapped < semantic; ++mapped) {
+                vip_unmap_buffer(context.outputs[context.semantic_to_actual[mapped]].buffer);
+            }
+            return -1;
+        }
+        semantic_outputs[semantic] = static_cast<const float *>(mapped_outputs[semantic]);
+    }
+    context.last_timing.output_map_ns = elapsed_ns(output_map_started);
+
+    const auto decode_started = SteadyClock::now();
+    const std::vector<twopoint::pose::DecodedDetection> decoded =
+        twopoint::pose::decode_yolo11_pose(
+            semantic_outputs,
+            context.score_threshold,
+            context.nms_threshold,
+            max_detections
+        );
+    context.last_timing.decode_ns = elapsed_ns(decode_started);
+
+    const auto output_unmap_started = SteadyClock::now();
+    for (std::size_t semantic = 0; semantic < semantic_outputs.size(); ++semantic) {
+        vip_unmap_buffer(context.outputs[context.semantic_to_actual[semantic]].buffer);
+    }
+    context.last_timing.output_unmap_ns = elapsed_ns(output_unmap_started);
+
+    const auto result_copy_started = SteadyClock::now();
+    const int count = std::min<int>(max_detections, static_cast<int>(decoded.size()));
+    for (int index = 0; index < count; ++index) {
+        const twopoint::pose::DecodedDetection &source = decoded[index];
+        PoseDetection &destination = detections[index];
+        destination.x1 = source.x1;
+        destination.y1 = source.y1;
+        destination.x2 = source.x2;
+        destination.y2 = source.y2;
+        destination.score = source.score;
+        std::copy(source.keypoints.begin(), source.keypoints.end(), destination.keypoints);
+    }
+    context.last_timing.result_copy_ns = elapsed_ns(result_copy_started);
+    context.last_timing.total_ns = elapsed_ns(total_started);
+    context.last_error.clear();
+    return count;
+}
+
 }  // namespace
 
 extern "C" void *pose_create(
@@ -351,6 +447,7 @@ extern "C" int pose_infer_rgb640(
     PoseDetection *detections,
     int max_detections
 ) {
+    const auto total_started = SteadyClock::now();
     auto *context = static_cast<PoseContext *>(opaque_context);
     if (context == nullptr) {
         global_last_error = "pose context is null";
@@ -359,6 +456,7 @@ extern "C" int pose_infer_rgb640(
     if (!context->require_owner_thread()) {
         return -1;
     }
+    context->last_timing = {};
     if (rgb_data == nullptr || rgb_size != kInputByteCount) {
         std::ostringstream stream;
         stream << "expected exactly " << kInputByteCount << " RGB input bytes, got " << rgb_size;
@@ -370,6 +468,7 @@ extern "C" int pose_infer_rgb640(
         return -1;
     }
 
+    const auto preprocess_started = SteadyClock::now();
     void *input_data = vip_map_buffer(context->input.buffer);
     if (input_data == nullptr) {
         context->fail("vip_map_buffer returned null for input");
@@ -377,62 +476,73 @@ extern "C" int pose_infer_rgb640(
     }
     std::memcpy(input_data, rgb_data, kInputByteCount);
     vip_unmap_buffer(context->input.buffer);
-    if (!context->check(
-            vip_flush_buffer(context->input.buffer, VIP_BUFFER_OPER_TYPE_FLUSH),
-            "flush input buffer"
-        ) || !context->check(vip_run_network(context->network), "vip_run_network")) {
+    context->last_timing.preprocess_ns = elapsed_ns(preprocess_started);
+    return run_prepared_input(*context, detections, max_detections, total_started);
+}
+
+extern "C" int pose_infer_bgr(
+    void *opaque_context,
+    const uint8_t *bgr_data,
+    size_t bgr_size,
+    int width,
+    int height,
+    size_t row_stride,
+    PoseDetection *detections,
+    int max_detections
+) {
+    const auto total_started = SteadyClock::now();
+    auto *context = static_cast<PoseContext *>(opaque_context);
+    if (context == nullptr) {
+        global_last_error = "pose context is null";
+        return -1;
+    }
+    if (!context->require_owner_thread()) {
+        return -1;
+    }
+    context->last_timing = {};
+    if (bgr_data == nullptr || width <= 0 || height <= 0) {
+        context->fail("BGR input pointer is null or dimensions are not positive");
+        return -1;
+    }
+    if (detections == nullptr || max_detections <= 0) {
+        context->fail("detections buffer is null or max_detections is not positive");
         return -1;
     }
 
-    std::array<const float *, twopoint::pose::kOutputCount> semantic_outputs{};
-    std::array<void *, twopoint::pose::kOutputCount> mapped_outputs{};
-    for (std::size_t semantic = 0; semantic < semantic_outputs.size(); ++semantic) {
-        const int actual = context->semantic_to_actual[semantic];
-        Tensor &tensor = context->outputs[actual];
-        if (!context->check(
-                vip_flush_buffer(tensor.buffer, VIP_BUFFER_OPER_TYPE_INVALIDATE),
-                "invalidate output buffer"
-            )) {
-            for (std::size_t mapped = 0; mapped < semantic; ++mapped) {
-                vip_unmap_buffer(context->outputs[context->semantic_to_actual[mapped]].buffer);
-            }
-            return -1;
-        }
-        mapped_outputs[semantic] = vip_map_buffer(tensor.buffer);
-        if (mapped_outputs[semantic] == nullptr) {
-            context->fail("vip_map_buffer returned null for output");
-            for (std::size_t mapped = 0; mapped < semantic; ++mapped) {
-                vip_unmap_buffer(context->outputs[context->semantic_to_actual[mapped]].buffer);
-            }
-            return -1;
-        }
-        semantic_outputs[semantic] = static_cast<const float *>(mapped_outputs[semantic]);
+    const auto preprocess_started = SteadyClock::now();
+    void *input_data = vip_map_buffer(context->input.buffer);
+    if (input_data == nullptr) {
+        context->fail("vip_map_buffer returned null for input");
+        return -1;
     }
+    const bool preprocessed = twopoint::pose::letterbox_bgr_to_rgb(
+        bgr_data,
+        bgr_size,
+        width,
+        height,
+        row_stride,
+        static_cast<std::uint8_t *>(input_data),
+        kInputByteCount,
+        POSE_INPUT_WIDTH,
+        POSE_INPUT_HEIGHT,
+        114
+    );
+    vip_unmap_buffer(context->input.buffer);
+    context->last_timing.preprocess_ns = elapsed_ns(preprocess_started);
+    if (!preprocessed) {
+        context->fail("invalid BGR input buffer or stride for fused preprocessing");
+        return -1;
+    }
+    return run_prepared_input(*context, detections, max_detections, total_started);
+}
 
-    const std::vector<twopoint::pose::DecodedDetection> decoded =
-        twopoint::pose::decode_yolo11_pose(
-            semantic_outputs,
-            context->score_threshold,
-            context->nms_threshold,
-            max_detections
-        );
-    for (std::size_t semantic = 0; semantic < semantic_outputs.size(); ++semantic) {
-        vip_unmap_buffer(context->outputs[context->semantic_to_actual[semantic]].buffer);
+extern "C" int pose_last_timing(void *opaque_context, PoseNativeTiming *timing) {
+    auto *context = static_cast<PoseContext *>(opaque_context);
+    if (context == nullptr || timing == nullptr || !context->require_owner_thread()) {
+        return -1;
     }
-
-    const int count = std::min<int>(max_detections, static_cast<int>(decoded.size()));
-    for (int index = 0; index < count; ++index) {
-        const twopoint::pose::DecodedDetection &source = decoded[index];
-        PoseDetection &destination = detections[index];
-        destination.x1 = source.x1;
-        destination.y1 = source.y1;
-        destination.x2 = source.x2;
-        destination.y2 = source.y2;
-        destination.score = source.score;
-        std::copy(source.keypoints.begin(), source.keypoints.end(), destination.keypoints);
-    }
-    context->last_error.clear();
-    return count;
+    *timing = context->last_timing;
+    return 0;
 }
 
 extern "C" uint32_t pose_driver_version(void *opaque_context) {

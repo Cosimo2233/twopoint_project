@@ -76,7 +76,7 @@ class CommandAppTest(unittest.TestCase):
         self.assertGreater(task_config.closed_loop.x_pid.output_limit_deg, 0)
         self.assertGreater(task_config.closed_loop.y_pid.output_limit_deg, 0)
         self.assertTrue(task_config.center.target_filter.enabled)
-        self.assertEqual(task_config.center.target_filter.ema_alpha, 0.5)
+        self.assertEqual(task_config.center.target_filter.ema_alpha, 0.4)
         self.assertEqual(task_config.center.target_filter.max_jump, 0.08)
         self.assertEqual(task_config.center.target_filter.jump_confirm_frames, 2)
 

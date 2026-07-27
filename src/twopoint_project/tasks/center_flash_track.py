@@ -61,6 +61,8 @@ def _initialize(
     print("gimbal: initializing and enabling motors")
     resources.gimbal.initialize()
     print("gimbal: motors enabled")
+    print("gimbal: commanding startup position x=0.0deg y=0.0deg")
+    resources.gimbal.move_to(0.0, 0.0)
     feedback = GimbalFeedbackReader(
         resources.gimbal,
         timeout=task_config.closed_loop.feedback_timeout,

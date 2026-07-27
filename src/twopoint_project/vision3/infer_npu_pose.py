@@ -30,6 +30,19 @@ class NativePoseDetection(ctypes.Structure):
     ]
 
 
+class NativePoseTimingBreakdown(ctypes.Structure):
+    _fields_ = [
+        ("preprocess_ns", ctypes.c_uint64),
+        ("input_flush_ns", ctypes.c_uint64),
+        ("network_ns", ctypes.c_uint64),
+        ("output_map_ns", ctypes.c_uint64),
+        ("decode_ns", ctypes.c_uint64),
+        ("output_unmap_ns", ctypes.c_uint64),
+        ("result_copy_ns", ctypes.c_uint64),
+        ("total_ns", ctypes.c_uint64),
+    ]
+
+
 @dataclass(frozen=True)
 class LetterboxMeta:
     scale: float
@@ -58,6 +71,18 @@ class PoseTiming:
     preprocess_ns: int
     inference_ns: int
     postprocess_ns: int
+
+
+@dataclass(frozen=True)
+class PoseNativeTiming:
+    preprocess_ns: int
+    input_flush_ns: int
+    network_ns: int
+    output_map_ns: int
+    decode_ns: int
+    output_unmap_ns: int
+    result_copy_ns: int
+    total_ns: int
 
 
 def validate_unit_interval(value: float, name: str) -> float:
@@ -109,6 +134,24 @@ def letterbox_rgb_uint8(
         scale=scale,
         left=left,
         top=top,
+        original_width=original_width,
+        original_height=original_height,
+    )
+
+
+def letterbox_meta(frame_bgr: np.ndarray, size: int = INPUT_SIZE) -> LetterboxMeta:
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+        raise ValueError(f"expected BGR frame shape [H, W, 3], got {frame_bgr.shape}")
+    if frame_bgr.dtype != np.uint8:
+        raise ValueError(f"expected uint8 BGR frame, got {frame_bgr.dtype}")
+    original_height, original_width = frame_bgr.shape[:2]
+    scale = min(size / original_width, size / original_height)
+    resized_width = int(round(original_width * scale))
+    resized_height = int(round(original_height * scale))
+    return LetterboxMeta(
+        scale=scale,
+        left=(size - resized_width) // 2,
+        top=(size - resized_height) // 2,
         original_width=original_width,
         original_height=original_height,
     )
@@ -210,7 +253,9 @@ class NpuPoseInferencer:
         self._context: int | None = None
         self._owner_thread: int | None = None
         self._driver_version: int | None = None
+        self._native_output = (NativePoseDetection * MAX_DETECTIONS)()
         self.last_timing: PoseTiming | None = None
+        self.last_native_timing: PoseNativeTiming | None = None
 
     @property
     def providers(self) -> list[str]:
@@ -235,6 +280,22 @@ class NpuPoseInferencer:
             ctypes.c_int,
         ]
         library.pose_infer_rgb640.restype = ctypes.c_int
+        library.pose_infer_bgr.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_size_t,
+            ctypes.POINTER(NativePoseDetection),
+            ctypes.c_int,
+        ]
+        library.pose_infer_bgr.restype = ctypes.c_int
+        library.pose_last_timing.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(NativePoseTimingBreakdown),
+        ]
+        library.pose_last_timing.restype = ctypes.c_int
         library.pose_driver_version.argtypes = [ctypes.c_void_p]
         library.pose_driver_version.restype = ctypes.c_uint32
         library.pose_last_error.argtypes = [ctypes.c_void_p]
@@ -275,27 +336,41 @@ class NpuPoseInferencer:
         self,
         frame_bgr: np.ndarray,
     ) -> tuple[list[PoseDetection], LetterboxMeta]:
-        preprocess_started = time.monotonic_ns()
-        tensor, meta = letterbox_rgb_uint8(frame_bgr, self.img_size)
-        preprocess_finished = time.monotonic_ns()
+        meta = letterbox_meta(frame_bgr, self.img_size)
+        if not frame_bgr.flags.c_contiguous:
+            frame_bgr = np.ascontiguousarray(frame_bgr)
         library, context = self._ensure_context()
-        native_output = (NativePoseDetection * MAX_DETECTIONS)()
-        inference_started = time.monotonic_ns()
-        count = library.pose_infer_rgb640(
+        count = library.pose_infer_bgr(
             context,
-            tensor.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-            tensor.nbytes,
-            native_output,
+            frame_bgr.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            frame_bgr.nbytes,
+            meta.original_width,
+            meta.original_height,
+            frame_bgr.strides[0],
+            self._native_output,
             MAX_DETECTIONS,
         )
-        inference_finished = time.monotonic_ns()
         if count < 0:
             raise RuntimeError(f"A733 NPU inference failed: {self._native_error(context)}")
+
+        native_timing = NativePoseTimingBreakdown()
+        if library.pose_last_timing(context, ctypes.byref(native_timing)) != 0:
+            raise RuntimeError(f"failed to read A733 NPU timing: {self._native_error(context)}")
+        self.last_native_timing = PoseNativeTiming(
+            preprocess_ns=int(native_timing.preprocess_ns),
+            input_flush_ns=int(native_timing.input_flush_ns),
+            network_ns=int(native_timing.network_ns),
+            output_map_ns=int(native_timing.output_map_ns),
+            decode_ns=int(native_timing.decode_ns),
+            output_unmap_ns=int(native_timing.output_unmap_ns),
+            result_copy_ns=int(native_timing.result_copy_ns),
+            total_ns=int(native_timing.total_ns),
+        )
 
         postprocess_started = time.monotonic_ns()
         detections: list[PoseDetection] = []
         for index in range(count):
-            native = native_output[index]
+            native = self._native_output[index]
             keypoints = tuple(
                 PoseKeypoint(
                     float(native.keypoints[keypoint * 3]),
@@ -316,10 +391,20 @@ class NpuPoseInferencer:
                     keypoints=keypoints,
                 )
             )
+        python_result_ns = time.monotonic_ns() - postprocess_started
         self.last_timing = PoseTiming(
-            preprocess_ns=preprocess_finished - preprocess_started,
-            inference_ns=inference_finished - inference_started,
-            postprocess_ns=time.monotonic_ns() - postprocess_started,
+            preprocess_ns=(
+                self.last_native_timing.preprocess_ns
+                + self.last_native_timing.input_flush_ns
+            ),
+            inference_ns=self.last_native_timing.network_ns,
+            postprocess_ns=(
+                self.last_native_timing.output_map_ns
+                + self.last_native_timing.decode_ns
+                + self.last_native_timing.output_unmap_ns
+                + self.last_native_timing.result_copy_ns
+                + python_result_ns
+            ),
         )
         return detections, meta
 

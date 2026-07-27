@@ -142,6 +142,9 @@ class TaskFlowTest(unittest.TestCase):
         resources = fake_resources()
         events: list[str] = []
         resources.gimbal.initialize = Mock(side_effect=lambda: events.append("motor_enable"))
+        resources.gimbal.move_to = Mock(
+            side_effect=lambda x, y: events.append(f"move_to({x},{y})")
+        )
         resources.monitor.start = Mock(side_effect=lambda: events.append("monitor_start"))
         resources.laser.on = Mock(side_effect=lambda: events.append("laser_on"))
         with patch.object(
@@ -167,7 +170,13 @@ class TaskFlowTest(unittest.TestCase):
         self.assertNotIn("stable_frames", call)
         self.assertEqual(
             events,
-            ["motor_enable", "monitor_start", "laser_on", "tracking"],
+            [
+                "motor_enable",
+                "move_to(0.0,0.0)",
+                "monitor_start",
+                "laser_on",
+                "tracking",
+            ],
         )
 
 

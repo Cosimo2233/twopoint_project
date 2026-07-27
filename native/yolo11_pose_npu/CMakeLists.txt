@@ -46,6 +46,7 @@ find_library(
 add_library(
     yolo11_pose_npu
     SHARED
+    src/preprocess.cpp
     src/postprocess.cpp
     src/yolo11_pose_npu.cpp
 )
@@ -84,6 +85,18 @@ if(BUILD_TESTING)
     )
     target_compile_options(yolo11_pose_postprocess_test PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME yolo11_pose_postprocess COMMAND yolo11_pose_postprocess_test)
+
+    add_executable(
+        yolo11_pose_preprocess_test
+        tests/preprocess_test.cpp
+        src/preprocess.cpp
+    )
+    target_include_directories(
+        yolo11_pose_preprocess_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_compile_options(yolo11_pose_preprocess_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME yolo11_pose_preprocess COMMAND yolo11_pose_preprocess_test)
 endif()
 
 install(TARGETS yolo11_pose_npu LIBRARY DESTINATION lib)
